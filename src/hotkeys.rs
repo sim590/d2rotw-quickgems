@@ -33,8 +33,13 @@ pub fn start_terminal() -> TerminalGuard {
         return TerminalGuard;
     }
 
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        RUNNING.store(false, Ordering::SeqCst);
+        return TerminalGuard;
+    }
+    enable_output_processing();
+
     std::thread::spawn(|| {
-        let _ = crossterm::terminal::enable_raw_mode();
         while RUNNING.load(Ordering::SeqCst) {
             match event::poll(Duration::from_millis(100)) {
                 Ok(true) => {
@@ -61,10 +66,22 @@ pub fn start_terminal() -> TerminalGuard {
                 Err(_) => break,
             }
         }
-        let _ = crossterm::terminal::disable_raw_mode();
     });
 
     TerminalGuard
+}
+
+/// Le mode brut de crossterm désactive la traduction `\n` -> `\r\n`.
+/// On remet `OPOST`/`ONLCR` pour garder les logs alignés, tout en gardant
+/// l'entrée non canonique pour lire F8/F9 immédiatement.
+fn enable_output_processing() {
+    unsafe {
+        let mut termios: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(libc::STDIN_FILENO, &mut termios) == 0 {
+            termios.c_oflag |= libc::OPOST | libc::ONLCR;
+            let _ = libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &termios);
+        }
+    }
 }
 
 pub fn take_pause() -> bool {

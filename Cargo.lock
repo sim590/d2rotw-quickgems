@@ -198,6 +198,7 @@ dependencies = [
  "crossterm",
  "fontdue",
  "image",
+ "libc",
  "serde",
  "toml",
  "x11rb",
