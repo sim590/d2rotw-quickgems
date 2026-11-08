@@ -297,15 +297,18 @@ fn run_live_inner(
     park(x11, window, profile)?;
     let final_image = x11.capture_window(window)?;
     let final_table = table::read_table(&final_image, profile, templates, false)?;
+    let model_total: u32 = counts.iter().flatten().sum();
+    logger.log(format!("Total selon le modèle: {model_total}"));
     logger.log(format!(
-        "Total lu après exécution: {}",
+        "Total relu après exécution: {}",
         final_table.known_total()
     ));
     if !final_table.detected {
         logger.log("Attention: table non détectée après l'exécution.");
     } else if !final_table.uncertain.is_empty() {
         logger.log(format!(
-            "Attention: {} cellule(s) incertaine(s) après l'exécution.",
+            "Note: {} cellule(s) relue(s) avec une marge faible; \
+             les actions ont été vérifiées avec la valeur attendue.",
             final_table.uncertain.len()
         ));
     }
@@ -335,7 +338,7 @@ fn acquire_source(
         check_tab_live(x11, window, profile)?;
         x11.click(source_x, source_y, MouseButton::Right, Modifiers::CtrlShift)?;
 
-        if wait_cell(
+        if let Some(reading) = wait_cell(
             x11,
             window,
             profile,
@@ -344,9 +347,13 @@ fn acquire_source(
             row,
             expected,
             Duration::from_secs(2),
-        )?
-        .is_some()
-        {
+        )? {
+            if !reading.is_confident() {
+                logger.log(format!(
+                    "  source acceptée avec marge faible: {:?} score {:.3} marge {:.3}",
+                    reading.best_candidate, reading.score, reading.margin
+                ));
+            }
             return Ok(());
         }
 
@@ -458,7 +465,7 @@ fn retrieve_with_retry(
         let (result_x, result_y) = cube_slot_point(window, profile, result_slot);
         x11.click(result_x, result_y, MouseButton::Left, Modifiers::CtrlShift)?;
 
-        if wait_cell(
+        if let Some(reading) = wait_cell(
             x11,
             window,
             profile,
@@ -467,9 +474,13 @@ fn retrieve_with_retry(
             row,
             expected,
             Duration::from_secs(2),
-        )?
-        .is_some()
-        {
+        )? {
+            if !reading.is_confident() {
+                logger.log(format!(
+                    "  cible acceptée avec marge faible: {:?} score {:.3} marge {:.3}",
+                    reading.best_candidate, reading.score, reading.margin
+                ));
+            }
             let cube = read_cube_live(x11, window, profile)?;
             if cube.occupied.iter().any(|occupied| *occupied) {
                 bail!("le cube n'est pas vide après la réinscription de la gemme");
@@ -505,7 +516,7 @@ fn wait_cell(
         park(x11, window, profile)?;
         let image = x11.capture_window(window)?;
         let reading = table::read_cell(&image, profile, templates, col, row, false)?;
-        if reading.is_confident() && reading.number == Some(expected_u16) {
+        if expected_accepted(&reading, expected_u16) {
             return Ok(Some(reading));
         }
 
@@ -514,6 +525,14 @@ fn wait_cell(
         }
         sleep(Duration::from_millis(100));
     }
+}
+
+/// Vérification d'action : la valeur attendue est connue. Si elle est le
+/// meilleur candidat avec un score élevé, une marge un peu faible est
+/// acceptable; c'est le cas typique d'un chiffre à 36 lu à 0.78 de score mais
+/// à 0.014 de marge.
+fn expected_accepted(reading: &CountReading, expected: u16) -> bool {
+    reading.best_candidate == Some(expected) && reading.score >= 0.75
 }
 
 fn read_cube_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<CubeReading> {
@@ -636,4 +655,38 @@ fn park_point(window: &GameWindow, profile: &Profile) -> (i32, i32) {
         window.x + profile.panel.x + profile.click.park_x,
         window.y + profile.panel.y + profile.click.park_y,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expected_accepted;
+    use crate::vision::digits::CountReading;
+
+    fn reading(best: u16, score: f32, margin: f32) -> CountReading {
+        CountReading {
+            number: None,
+            best_candidate: Some(best),
+            score,
+            margin,
+            bbox: None,
+            kept_components: 2,
+            actual_pixels: 88,
+            top_candidates: vec![(best, score)],
+            window: 22,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn accepts_expected_value_with_low_margin_but_high_score() {
+        let reading = reading(36, 0.782, 0.014);
+        assert!(expected_accepted(&reading, 36));
+        assert!(!expected_accepted(&reading, 35));
+    }
+
+    #[test]
+    fn rejects_expected_value_with_low_score() {
+        let reading = reading(36, 0.70, 0.05);
+        assert!(!expected_accepted(&reading, 36));
+    }
 }
