@@ -17,7 +17,7 @@ use crate::profile::Rect;
 const FONT_BYTES: &[u8] = include_bytes!("../../assets/exocet-blizzard-medium.ttf");
 
 /// Seuil de blancheur pour le texte (le contour noir reste sous ce seuil).
-const WHITE_THRESHOLD: f32 = 120.0;
+const WHITE_THRESHOLD: f32 = 180.0;
 /// Saturation maximale d'un pixel considéré comme du texte blanc.
 const SATURATION_THRESHOLD: f32 = 0.35;
 /// Un pixel très lumineux est accepté même s'il est légèrement coloré.
@@ -589,6 +589,18 @@ mod tests {
             let reading = read_count(&roi, 14, 22, &templates, false);
             assert_eq!(reading.best_candidate, Some(20));
         }
+    }
+
+    #[test]
+    fn reads_diamond_parfait_27() {
+        let bytes = include_bytes!("../../tests/fixtures/diamond_parfait_27.png");
+        let roi = image::load_from_memory(bytes)
+            .expect("fixture PNG")
+            .to_rgb8();
+        let templates = TemplateSet::load().expect("templates");
+        let reading = read_count(&roi, 14, 22, &templates, false);
+        assert_eq!(reading.best_candidate, Some(27));
+        assert!(reading.is_confident());
     }
 
     #[test]
