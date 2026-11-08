@@ -55,6 +55,9 @@ enum Command {
         /// Prescription des quantités minimales à conserver.
         #[arg(long, default_value = "quickgems.toml")]
         config: PathBuf,
+        /// Limite la projection à N transmutations (budget).
+        #[arg(long)]
+        max_transmutations: Option<usize>,
         /// Affiche les détails de lecture par cellule.
         #[arg(long)]
         debug: bool,
@@ -85,6 +88,9 @@ enum Command {
         /// Nombre maximal de transmutations à exécuter.
         #[arg(long, default_value_t = 1)]
         max_transmutations: usize,
+        /// Relit les 35 cellules toutes les N actions (0 désactive l'audit).
+        #[arg(long, default_value_t = 5)]
+        audit_every: usize,
         /// Affiche les détails de lecture par cellule.
         #[arg(long)]
         debug: bool,
@@ -103,8 +109,9 @@ fn main() -> Result<()> {
             image,
             profile,
             config,
+            max_transmutations,
             debug,
-        } => plan(&image, &profile, &config, debug),
+        } => plan(&image, &profile, &config, max_transmutations, debug),
         Command::Capture { output, profile } => capture_live(&output, &profile),
         Command::Run {
             image,
@@ -112,6 +119,7 @@ fn main() -> Result<()> {
             config,
             execute,
             max_transmutations,
+            audit_every,
             debug,
         } => run(
             image.as_deref(),
@@ -119,6 +127,7 @@ fn main() -> Result<()> {
             &config,
             execute,
             max_transmutations,
+            audit_every,
             debug,
         ),
     }
@@ -158,6 +167,7 @@ fn run(
     config_path: &Path,
     execute: bool,
     max_transmutations: usize,
+    audit_every: usize,
     debug: bool,
 ) -> Result<()> {
     let profile = Profile::load(profile_path)?;
@@ -166,6 +176,7 @@ fn run(
     let options = executor::RunOptions {
         execute,
         max_transmutations,
+        audit_every,
         debug,
     };
 
@@ -206,7 +217,13 @@ fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
     Ok(())
 }
 
-fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool) -> Result<()> {
+fn plan(
+    image_path: &Path,
+    profile_path: &Path,
+    config_path: &Path,
+    max_transmutations: Option<usize>,
+    debug: bool,
+) -> Result<()> {
     let profile = Profile::load(profile_path)?;
     let game = load_game_image(image_path, &profile)?;
     let templates = TemplateSet::load()?;
@@ -232,12 +249,40 @@ fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool)
     let config = Config::load(config_path)?;
     let keep = config.keep_matrix()?;
     let counts = counts_from_table(&table)?;
-    let plan = planner::project(counts, &keep);
+    let plan = match max_transmutations {
+        Some(max) => planner::project_limited(counts, &keep, max),
+        None => planner::project(counts, &keep),
+    };
+    let conversions = plan.conversion_count();
+    let source_gems = conversions.saturating_mul(3);
+    let produced_gems = conversions;
+    let net_loss = conversions.saturating_mul(2);
 
     println!("\nLimites keep (minimum à conserver):");
     print_keep(&keep);
 
-    println!("\nPlan: {} transmutations", plan.conversion_count());
+    println!("\nPlan: {conversions} transmutations");
+    if let Some(max) = max_transmutations {
+        println!("(Projection limitée à {max} actions.)");
+    }
+    println!(
+        "Budget: {source_gems} gemmes sources consommées, \
+         {produced_gems} gemmes produites, net -{net_loss}."
+    );
+    println!("Coût par type:");
+    for gem_type in 0..7 {
+        let count: u32 = plan.conversions[gem_type].iter().sum();
+        if count > 0 {
+            let suffix = if count > 1 { "s" } else { "" };
+            println!(
+                "  {}: {} sources -> {} gemme{}",
+                GEM_TYPES[gem_type],
+                count.saturating_mul(3),
+                count,
+                suffix
+            );
+        }
+    }
     for gem_type in 0..7 {
         let mut parts = Vec::new();
         for tier in 0..4 {

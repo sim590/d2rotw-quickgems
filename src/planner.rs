@@ -41,12 +41,21 @@ pub fn next_action(counts: &Counts, keep: &Keep) -> Option<Action> {
 
 /// Projette toutes les conversions possibles à partir d'un état initial.
 pub fn project(counts: Counts, keep: &Keep) -> Plan {
+    project_limited(counts, keep, usize::MAX)
+}
+
+/// Projette au plus `max_actions` conversions. Sert à calculer un budget avant
+/// de lancer un lot live.
+pub fn project_limited(counts: Counts, keep: &Keep, max_actions: usize) -> Plan {
     let initial_counts = counts;
     let mut final_counts = counts;
     let mut actions = Vec::new();
     let mut conversions = [[0u32; 4]; 7];
 
-    while let Some(action) = next_action(&final_counts, keep) {
+    while actions.len() < max_actions {
+        let Some(action) = next_action(&final_counts, keep) else {
+            break;
+        };
         final_counts[action.gem_type][action.tier] -= 3;
         final_counts[action.gem_type][action.tier + 1] += 1;
         conversions[action.gem_type][action.tier] += 1;
@@ -133,6 +142,18 @@ mod tests {
         assert_eq!(plan.final_counts[0][2], 1);
         assert_eq!(plan.conversion_count(), 4);
         assert!(next_action(&plan.final_counts, &keep).is_none());
+    }
+
+    #[test]
+    fn project_limited_stops_at_budget() {
+        let mut counts = empty_counts();
+        let keep = empty_keep();
+        counts[0][0] = 9;
+
+        let plan = project_limited(counts, &keep, 2);
+        assert_eq!(plan.conversion_count(), 2);
+        assert_eq!(plan.final_counts[0][0], 3);
+        assert_eq!(plan.final_counts[0][1], 2);
     }
 
     #[test]

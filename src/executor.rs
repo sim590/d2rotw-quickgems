@@ -24,6 +24,7 @@ use crate::vision::table::{self, GEM_TYPES, TIERS};
 pub struct RunOptions {
     pub execute: bool,
     pub max_transmutations: usize,
+    pub audit_every: usize,
     pub debug: bool,
 }
 
@@ -289,6 +290,10 @@ fn run_live_inner(
         counts[action.gem_type][action.tier] = source_before.saturating_sub(3);
         counts[action.gem_type][action.tier + 1] = target_before.saturating_add(1);
         done += 1;
+
+        if options.audit_every > 0 && step % options.audit_every == 0 {
+            audit_table(x11, window, profile, templates, logger, &counts, step)?;
+        }
         logger.log("  ok");
     }
 
@@ -579,6 +584,73 @@ fn check_tab_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<(
     Ok(())
 }
 
+/// Relit les 35 cellules et compare l'état réel au modèle. Une différence
+/// arrête le run avant de continuer sur un état incohérent.
+fn audit_table(
+    x11: &X11,
+    window: &GameWindow,
+    profile: &Profile,
+    templates: &TemplateSet,
+    logger: &mut Logger,
+    expected: &planner::Counts,
+    step: usize,
+) -> Result<()> {
+    park(x11, window, profile)?;
+    let image = x11.capture_window(window)?;
+    let table = table::read_table(&image, profile, templates, false)
+        .map_err(|error| safety(format!("audit étape {step}: lecture impossible: {error:#}")))?;
+
+    if !table.tab_active {
+        return Err(safety(format!("audit étape {step}: onglet Gemmes inactif")));
+    }
+    if !table.detected {
+        return Err(safety(format!("audit étape {step}: table non détectée")));
+    }
+    if !table.uncertain.is_empty() {
+        return Err(safety(format!(
+            "audit étape {step}: {} cellule(s) incertaine(s)",
+            table.uncertain.len()
+        )));
+    }
+
+    let actual = crate::counts_from_table(&table)
+        .map_err(|error| safety(format!("audit étape {step}: {error:#}")))?;
+    let differences = compare_counts(expected, &actual);
+    if differences.is_empty() {
+        logger.log(format!("  audit étape {step}: ok"));
+        return Ok(());
+    }
+
+    logger.log(format!(
+        "  audit étape {step}: {} différence(s) avec le modèle",
+        differences.len()
+    ));
+    for difference in &differences {
+        logger.log(format!("    {difference}"));
+    }
+    Err(safety(format!(
+        "audit étape {step}: la table a changé de façon inattendue"
+    )))
+}
+
+fn compare_counts(expected: &planner::Counts, actual: &planner::Counts) -> Vec<String> {
+    let mut differences = Vec::new();
+    for gem_type in 0..7 {
+        for tier in 0..5 {
+            if expected[gem_type][tier] != actual[gem_type][tier] {
+                differences.push(format!(
+                    "{} / {}: modèle {}, table {}",
+                    GEM_TYPES[gem_type],
+                    TIERS[tier],
+                    expected[gem_type][tier],
+                    actual[gem_type][tier]
+                ));
+            }
+        }
+    }
+    differences
+}
+
 fn recover_cube(
     x11: &X11,
     window: &GameWindow,
@@ -659,7 +731,7 @@ fn park_point(window: &GameWindow, profile: &Profile) -> (i32, i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::expected_accepted;
+    use super::{compare_counts, expected_accepted};
     use crate::vision::digits::CountReading;
 
     fn reading(best: u16, score: f32, margin: f32) -> CountReading {
@@ -688,5 +760,24 @@ mod tests {
     fn rejects_expected_value_with_low_score() {
         let reading = reading(36, 0.70, 0.05);
         assert!(!expected_accepted(&reading, 36));
+    }
+
+    #[test]
+    fn audit_compare_accepts_identical_tables() {
+        let counts = [[0u32; 5]; 7];
+        assert!(compare_counts(&counts, &counts).is_empty());
+    }
+
+    #[test]
+    fn audit_compare_detects_a_changed_cell() {
+        let expected = [[0u32; 5]; 7];
+        let mut actual = expected;
+        actual[2][3] = 20;
+
+        let differences = compare_counts(&expected, &actual);
+        assert_eq!(differences.len(), 1);
+        assert!(differences[0].contains("Rubis"));
+        assert!(differences[0].contains("Sans défaut"));
+        assert!(differences[0].contains("20"));
     }
 }
