@@ -900,10 +900,10 @@ fn recover_cube(
 }
 
 fn save_error_frame(x11: &X11, window: &GameWindow, logger: &mut Logger) {
-    let path = format!("logs/error-{}.png", epoch_seconds());
+    let path = crate::logging::run_dir().join(format!("error-{}.png", epoch_seconds()));
     match x11.capture_window(window) {
         Ok(image) => match image.save(&path) {
-            Ok(()) => logger.log(format!("Capture d'erreur: {path}")),
+            Ok(()) => logger.log(format!("Capture d'erreur: {}", path.display())),
             Err(error) => logger.log(format!("Échec de sauvegarde de la capture: {error}")),
         },
         Err(error) => logger.log(format!("Échec de capture d'erreur: {error:#}")),
