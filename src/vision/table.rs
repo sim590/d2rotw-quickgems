@@ -164,7 +164,7 @@ pub fn read_cell(
     Ok(digits::read_count(
         &roi,
         baseline,
-        profile.table.count_windows[col],
+        profile.table.count_windows[col][row],
         templates,
         debug,
     ))

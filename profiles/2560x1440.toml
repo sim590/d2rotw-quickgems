@@ -17,9 +17,18 @@ height = 900
 count_right_edges = [196, 277, 358, 440, 521, 603, 684]
 # Haut du texte du nombre pour chaque rangée (5 paliers).
 count_tops = [218, 284, 350, 417, 484]
-# Fenêtre de droite par colonne. Diamant et crâne ont une icône blanche/gris
-# qui peut toucher les chiffres; on réduit leur fenêtre.
-count_windows = [22, 22, 22, 22, 22, 28, 20]
+# Fenêtre de droite par type et par palier. Le diamant a besoin de 26 px aux
+# paliers Normal et Sans défaut pour lire « 20 » sans couper le 2; les autres
+# paliers gardent 22 px pour éviter l'icône. Le crâne reste à 20 px.
+count_windows = [
+  [22, 22, 26, 26, 22], # Diamant
+  [22, 22, 22, 22, 22], # Émeraude
+  [22, 22, 22, 22, 22], # Rubis
+  [22, 22, 22, 22, 22], # Topaze
+  [22, 22, 22, 22, 22], # Améthyste
+  [28, 28, 28, 28, 28], # Saphir
+  [20, 20, 20, 20, 20], # Crâne
+]
 # Zone de lecture relative au bord droit et au haut du nombre.
 roi_left = -34
 roi_right = 4

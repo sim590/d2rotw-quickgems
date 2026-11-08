@@ -528,7 +528,18 @@ fn render_text(font: &Font, text: &str, size_px: f32) -> GrayImage {
 /// Réduit une image rendue à son masque binaire serré.
 #[cfg(test)]
 mod tests {
-    use super::is_confident_score;
+    use super::{is_confident_score, read_count, TemplateSet};
+
+    #[test]
+    fn reads_20_without_cutting_the_2() {
+        let bytes = include_bytes!("../../tests/fixtures/diamond_normal_20.png");
+        let roi = image::load_from_memory(bytes)
+            .expect("fixture PNG")
+            .to_rgb8();
+        let templates = TemplateSet::load().expect("templates");
+        let reading = read_count(&roi, 14, 26, &templates, false);
+        assert_eq!(reading.best_candidate, Some(20));
+    }
 
     #[test]
     fn accepts_high_score_with_low_margin() {
