@@ -297,7 +297,7 @@ impl X11 {
 
     pub fn click(&self, x: i32, y: i32, button: MouseButton, modifiers: Modifiers) -> Result<()> {
         self.move_pointer(x, y)?;
-        sleep(Duration::from_millis(30));
+        sleep(Duration::from_millis(50));
 
         if let Err(error) = self.press_modifiers(modifiers) {
             let _ = self.release_modifiers(modifiers);
@@ -324,7 +324,7 @@ impl X11 {
             .xtest_fake_input(XTEST_BUTTON_PRESS, button.code(), 0, self.root, 0, 0, 0)
             .context("XTest button press a échoué")?;
         self.connection.flush().context("flush X11 impossible")?;
-        sleep(Duration::from_millis(60));
+        sleep(Duration::from_millis(80));
         self.connection
             .xtest_fake_input(XTEST_BUTTON_RELEASE, button.code(), 0, self.root, 0, 0, 0)
             .context("XTest button release a échoué")?;
@@ -332,7 +332,7 @@ impl X11 {
         // Laisser au jeu le temps de traiter le clic complet avant de
         // relâcher Ctrl+Shift. Sinon, un clic de réinscription peut être vu
         // comme un simple clic et déplacer la gemme dans l'inventaire.
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(250));
         Ok(())
     }
 
@@ -341,13 +341,13 @@ impl X11 {
             self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
             self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
             self.connection.flush().context("flush X11 impossible")?;
-            sleep(Duration::from_millis(60));
+            sleep(Duration::from_millis(250));
 
             if !self.modifiers_down()? {
                 self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
                 self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
                 self.connection.flush().context("flush X11 impossible")?;
-                sleep(Duration::from_millis(60));
+                sleep(Duration::from_millis(250));
                 if !self.modifiers_down()? {
                     bail!("Ctrl+Shift ne sont pas actifs avant le clic");
                 }
