@@ -1,0 +1,100 @@
+# Profil mesuré sur une capture 2560x1440 de Diablo II: Resurrected
+# (Reign of the Warlock), cache ouvert, onglet Gemmes.
+#
+# Toutes les coordonnées du panneau et de la table sont relatives au coin
+# supérieur gauche du panneau "Cache" dans la fenêtre du jeu.
+image_width = 2560
+image_height = 1440
+
+[panel]
+x = 130
+y = 120
+width = 820
+height = 900
+
+[table]
+# Bord droit de la zone du nombre pour chaque colonne (7 types de gemmes).
+count_right_edges = [196, 277, 358, 440, 521, 603, 684]
+# Haut du texte du nombre pour chaque rangée (5 paliers).
+count_tops = [218, 284, 350, 417, 484]
+# Fenêtre de droite par colonne. Diamant et crâne ont une icône blanche/gris
+# qui peut toucher les chiffres; on réduit leur fenêtre.
+count_windows = [22, 22, 22, 22, 22, 28, 20]
+# Zone de lecture relative au bord droit et au haut du nombre.
+roi_left = -34
+roi_right = 4
+roi_top = -1
+roi_bottom = 18
+
+# Grille du cube horadrique : 3 colonnes x 4 rangées, cases de 61x61 px.
+[[cube.slots]]
+x = 317
+y = 544
+width = 61
+height = 61
+
+[[cube.slots]]
+x = 382
+y = 544
+width = 61
+height = 61
+
+[[cube.slots]]
+x = 448
+y = 544
+width = 61
+height = 61
+
+[[cube.slots]]
+x = 317
+y = 610
+width = 61
+height = 60
+
+[[cube.slots]]
+x = 382
+y = 610
+width = 62
+height = 60
+
+[[cube.slots]]
+x = 448
+y = 610
+width = 61
+height = 60
+
+[[cube.slots]]
+x = 317
+y = 675
+width = 61
+height = 60
+
+[[cube.slots]]
+x = 382
+y = 675
+width = 61
+height = 60
+
+[[cube.slots]]
+x = 448
+y = 675
+width = 61
+height = 60
+
+[[cube.slots]]
+x = 317
+y = 740
+width = 61
+height = 61
+
+[[cube.slots]]
+x = 382
+y = 740
+width = 61
+height = 61
+
+[[cube.slots]]
+x = 448
+y = 740
+width = 61
+height = 61
