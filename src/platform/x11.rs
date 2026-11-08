@@ -26,6 +26,7 @@ const XTEST_KEY_RELEASE: u8 = 3;
 
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
+const KEYSYM_F8: u32 = 0xffc5;
 const KEYSYM_F9: u32 = 0xffc6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,9 @@ pub struct X11 {
     net_active_window: u32,
     ctrl_keycode: u8,
     shift_keycode: u8,
+    pause_keycode: u8,
     emergency_keycode: u8,
+    pause_pending: Cell<bool>,
     last_pointer: Cell<Option<(i32, i32)>>,
 }
 
@@ -91,11 +94,35 @@ impl X11 {
             net_active_window,
             ctrl_keycode: 0,
             shift_keycode: 0,
+            pause_keycode: 0,
             emergency_keycode: 0,
+            pause_pending: Cell::new(false),
             last_pointer: Cell::new(None),
         };
         x11.ctrl_keycode = x11.find_keycode(KEYSYM_CONTROL_L)?;
         x11.shift_keycode = x11.find_keycode(KEYSYM_SHIFT_L)?;
+        x11.pause_keycode = x11.find_keycode(KEYSYM_F8).unwrap_or(0);
+        if x11.pause_keycode != 0 {
+            let grab_ok = x11
+                .connection
+                .grab_key(
+                    false,
+                    x11.root,
+                    ModMask::ANY,
+                    x11.pause_keycode,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .is_ok();
+            if !grab_ok {
+                eprintln!(
+                    "Impossible de capturer F8 pour la pause; \
+                     la pause clavier restera indisponible."
+                );
+                x11.pause_keycode = 0;
+            }
+            let _ = x11.connection.flush();
+        }
         x11.emergency_keycode = x11.find_keycode(KEYSYM_F9).unwrap_or(0);
         if x11.emergency_keycode != 0 {
             let grab_ok = x11
@@ -150,21 +177,31 @@ impl X11 {
 
     /// Vrai si F9 a été pressé depuis le dernier appel.
     pub fn emergency_requested(&self) -> Result<bool> {
-        if self.emergency_keycode == 0 {
+        if self.emergency_keycode == 0 && self.pause_keycode == 0 {
             return Ok(false);
         }
+
+        let mut stop = false;
         while let Some(event) = self
             .connection
             .poll_for_event()
             .context("poll_for_event X11 a échoué")?
         {
             if let Event::KeyPress(key) = event {
-                if key.detail == self.emergency_keycode {
-                    return Ok(true);
+                if self.pause_keycode != 0 && key.detail == self.pause_keycode {
+                    self.pause_pending.set(true);
+                }
+                if self.emergency_keycode != 0 && key.detail == self.emergency_keycode {
+                    stop = true;
                 }
             }
         }
-        Ok(false)
+        Ok(stop)
+    }
+
+    /// Consomme une demande de pause F8.
+    pub fn take_pause(&self) -> bool {
+        self.pause_pending.replace(false)
     }
 
     pub fn find_game_window(&self) -> Result<GameWindow> {

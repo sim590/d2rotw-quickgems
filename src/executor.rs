@@ -121,7 +121,7 @@ pub fn run_live(
         "Fenêtre: {} ({}x{}) @ ({}, {})",
         window.title, window.width, window.height, window.x, window.y
     ));
-    logger.log("Arrêt d'urgence: F9, ou déplace la souris hors du point de repos.");
+    logger.log("Pause/reprise: F8. Arrêt d'urgence: F9 ou mouvement de souris.");
 
     let result = run_live_inner(
         &x11,
@@ -135,6 +135,7 @@ pub fn run_live(
 
     if let Err(error) = &result {
         logger.log(format!("ERREUR: {error:#}"));
+        notify("QuickGems - erreur", &format!("{error:#}"));
         save_error_frame(&x11, &window, &mut logger);
         if error.downcast_ref::<SafetyStop>().is_none() {
             match recover_cube(&x11, &window, profile, &mut logger) {
@@ -227,10 +228,15 @@ fn run_live_inner(
 
     let mut counts = counts;
     let mut done = 0usize;
+    let started = Instant::now();
+    let mut performed = [[0u32; 4]; 7];
 
     for step in 1..=options.max_transmutations {
-        check_focus(x11, window)?;
         check_emergency(x11)?;
+        if x11.take_pause() {
+            wait_for_resume(x11, window, profile, templates, logger, &mut counts)?;
+        }
+        check_focus(x11, window)?;
 
         let Some(action) = planner::next_action(&counts, &keep) else {
             logger.log("Plus aucune transmutation valide.");
@@ -289,6 +295,7 @@ fn run_live_inner(
 
         counts[action.gem_type][action.tier] = source_before.saturating_sub(3);
         counts[action.gem_type][action.tier + 1] = target_before.saturating_add(1);
+        performed[action.gem_type][action.tier] += 1;
         done += 1;
 
         if options.audit_every > 0 && step % options.audit_every == 0 {
@@ -317,6 +324,32 @@ fn run_live_inner(
             final_table.uncertain.len()
         ));
     }
+
+    let seconds = started.elapsed().as_secs_f64();
+    let per_conversion = if done > 0 { seconds / done as f64 } else { 0.0 };
+    logger.log(format!(
+        "Durée totale (pauses incluses): {seconds:.1}s pour {done} conversion(s), \
+         {per_conversion:.2}s/conversion."
+    ));
+    logger.log("Conversions effectuées:");
+    for gem_type in 0..7 {
+        for tier in 0..4 {
+            let count = performed[gem_type][tier];
+            if count > 0 {
+                logger.log(format!(
+                    "  {}: {} -> {} x{}",
+                    GEM_TYPES[gem_type],
+                    TIERS[tier],
+                    TIERS[tier + 1],
+                    count
+                ));
+            }
+        }
+    }
+    notify(
+        "QuickGems",
+        &format!("{done} conversion(s), total modèle {model_total}"),
+    );
 
     Ok(())
 }
@@ -649,6 +682,95 @@ fn compare_counts(expected: &planner::Counts, actual: &planner::Counts) -> Vec<S
         }
     }
     differences
+}
+
+fn wait_for_resume(
+    x11: &X11,
+    window: &GameWindow,
+    profile: &Profile,
+    templates: &TemplateSet,
+    logger: &mut Logger,
+    counts: &mut planner::Counts,
+) -> Result<()> {
+    logger.log("Pause: F8 pour reprendre, F9 pour arrêter.");
+    loop {
+        if x11.emergency_requested()? {
+            return Err(safety("arrêt d'urgence demandé (F9)"));
+        }
+        if x11.take_pause() {
+            logger.log("Reprise demandée; relecture de la table et du cube...");
+            match reload_state(x11, window, profile, templates) {
+                Ok(new_counts) => {
+                    *counts = new_counts;
+                    let _ = x11.take_pause();
+                    logger.log(format!(
+                        "Reprise: total table {}",
+                        counts.iter().flatten().sum::<u32>()
+                    ));
+                    return Ok(());
+                }
+                Err(error) if error.downcast_ref::<SafetyStop>().is_some() => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    logger.log(format!(
+                        "Reprise impossible: {error:#}; corrige l'état puis presse F8."
+                    ));
+                }
+            }
+        }
+        sleep(Duration::from_millis(200));
+    }
+}
+
+fn reload_state(
+    x11: &X11,
+    window: &GameWindow,
+    profile: &Profile,
+    templates: &TemplateSet,
+) -> Result<planner::Counts> {
+    x11.focus_window(window)?;
+    sleep(Duration::from_millis(200));
+    if !x11.is_focused(window)? {
+        bail!("le jeu n'a pas le focus");
+    }
+    park_for_resume(x11, window, profile)?;
+    let image = x11.capture_window(window)?;
+    let table = table::read_table(&image, profile, templates, false)
+        .map_err(|error| anyhow!("relecture de la table impossible: {error:#}"))?;
+
+    if !table.tab_active {
+        bail!("l'onglet Gemmes n'est pas actif");
+    }
+    if !table.detected {
+        bail!("la table n'est pas détectée");
+    }
+    if !table.uncertain.is_empty() {
+        bail!("{} cellule(s) incertaine(s)", table.uncertain.len());
+    }
+
+    let cube = cube::read_cube(&image, profile)?;
+    if cube.occupied.iter().any(|occupied| *occupied) {
+        bail!("le cube doit être vide avant de reprendre");
+    }
+
+    crate::counts_from_table(&table)
+}
+
+fn park_for_resume(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
+    let (park_x, park_y) = park_point(window, profile);
+    x11.move_pointer(park_x, park_y)?;
+    sleep(Duration::from_millis(120));
+    check_emergency(x11)?;
+    x11.note_pointer()?;
+    Ok(())
+}
+
+fn notify(title: &str, body: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .arg(title)
+        .arg(body)
+        .spawn();
 }
 
 fn recover_cube(
