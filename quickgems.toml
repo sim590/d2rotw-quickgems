@@ -5,17 +5,16 @@
 
 [keep.default]
 abime = 10
-imparfait = 6
-normal = 4
-sans_defaut = 2
-parfait = 0
+imparfait = 5
+normal = 20
+sans_defaut = 5
 
 # Surcharges optionnelles par type. Les champs omis prennent la valeur du
 # défaut ci-dessus.
-[keep.diamant]
-abime = 20
-imparfait = 10
+# [keep.diamant]
+# abime = 20
+# imparfait = 10
 
-[keep.crane]
-abime = 20
-imparfait = 10
+# [keep.crane]
+# abime = 20
+# imparfait = 10
