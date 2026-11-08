@@ -90,7 +90,8 @@ pub struct CountReading {
     pub top_candidates: Vec<(u16, f32)>,
     pub window: usize,
     pub note: Option<String>,
-    /// Lecture confirmée par un indice indépendant, malgré un score modeste.
+    /// Lecture confirmée par le zéro final de la fenêtre étroite, malgré une
+    /// marge modeste entre deux nombres larges.
     pub corroborated: bool,
 }
 
@@ -141,6 +142,10 @@ pub fn read_count(
         windows.push(WIDE_WINDOW);
     }
 
+    // La fenêtre étroite évite le bas des icônes, mais elle coupe le premier
+    // chiffre des nombres larges: sur le diamant, « 30 » ne garde que le « 0 »
+    // et se lit comme un zéro. La fenêtre large voit le nombre complet; on
+    // l'utilise quand l'étroite ne garde qu'un zéro final.
     let mut base_best: Option<CountReading> = None;
     let mut wide_best: Option<CountReading> = None;
     let mut zero: Option<CountReading> = None;
@@ -170,36 +175,16 @@ pub fn read_count(
     }
 
     if let Some(base) = base_best {
-        // La fenêtre étroite est plus fiable près des icônes blanches, mais
-        // elle peut ne garder que le « 0 » d'un « 20 ». Si le candidat étroit
-        // est exactement zéro et que la fenêtre large trouve un nombre à deux
-        // chiffres avec un score élevé, on prend la fenêtre large.
-        let narrow_only_zero = base.best_candidate == Some(0);
-        if narrow_only_zero {
+        if base.best_candidate == Some(0) {
             if let Some(wide) = &wide_best {
                 if let Some(candidate) = wide.best_candidate {
-                    // La fenêtre étroite n'a gardé que le « 0 » final d'un
-                    // « 30 » (le 3 est coupé par le bord de la fenêtre). Si la
-                    // fenêtre large lit un nombre à deux chiffres qui finit
-                    // par ce même 0, les deux fenêtres se confirment: le score
-                    // plus bas de la fenêtre large vient de la marge d'image
-                    // autour du chiffre, pas d'une ambiguïté de lecture.
-                    let agrees_on_zero = candidate >= 10 && candidate % 10 == 0;
-                    // L'icône blanche du diamant touche la ligne de texte et
-                    // déborde au-dessus: son masque commence à y=0 et fait
-                    // 14 px de haut, alors qu'un chiffre propre commence à
-                    // y=1 et fait 13 px. Sans ce garde-fou, un vrai zéro
-                    // diamant se lit « 30 » à cause de l'icône.
-                    let in_text_band = wide
-                        .bbox
-                        .map(|bbox| bbox.y > 0 && bbox.height <= 13)
-                        .unwrap_or(false);
-                    if agrees_on_zero && in_text_band && wide.score >= 0.70 {
-                        let mut confirmed = wide.clone();
-                        confirmed.number = Some(candidate);
-                        confirmed.corroborated = true;
-                        confirmed.note = Some("chiffre large confirmé par le 0 étroit".to_string());
-                        return confirmed;
+                    if candidate >= 10 && candidate % 10 == 0 && wide.score >= 0.70 {
+                        let mut reading = wide.clone();
+                        reading.number = Some(candidate);
+                        reading.corroborated = true;
+                        reading.note =
+                            Some("nombre large lu hors de la fenêtre étroite".to_string());
+                        return reading;
                     }
                 }
             }
@@ -635,6 +620,18 @@ mod tests {
     }
 
     #[test]
+    fn reads_diamond_parfait_31() {
+        let bytes = include_bytes!("../../tests/fixtures/diamond_parfait_31.png");
+        let roi = image::load_from_memory(bytes)
+            .expect("fixture PNG")
+            .to_rgb8();
+        let templates = TemplateSet::load().expect("templates");
+        let reading = read_count(&roi, 14, 22, &templates, false);
+        assert_eq!(reading.best_candidate, Some(31));
+        assert!(reading.is_confident());
+    }
+
+    #[test]
     fn reads_diamond_parfait_27() {
         let bytes = include_bytes!("../../tests/fixtures/diamond_parfait_27.png");
         let roi = image::load_from_memory(bytes)
@@ -647,16 +644,16 @@ mod tests {
     }
 
     #[test]
-    fn keeps_zero_when_white_icon_touches_the_text() {
-        // Le diamant parfait blanc déborde sur la ligne du texte: sans le
-        // garde-fou de bande de texte, la fenêtre large lit « 30 ».
-        let bytes = include_bytes!("../../tests/fixtures/diamond_parfait_0.png");
+    fn reads_diamond_parfait_30() {
+        // La fenêtre étroite ne garde que le « 0 » final; la fenêtre large
+        // doit lire « 30 » malgré l'icône blanche du diamant.
+        let bytes = include_bytes!("../../tests/fixtures/diamond_parfait_30.png");
         let roi = image::load_from_memory(bytes)
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
         let reading = read_count(&roi, 14, 22, &templates, false);
-        assert_eq!(reading.best_candidate, Some(0));
+        assert_eq!(reading.best_candidate, Some(30));
         assert!(reading.is_confident());
     }
 
