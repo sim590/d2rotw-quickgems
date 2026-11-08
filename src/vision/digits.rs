@@ -31,6 +31,9 @@ const TEMPLATE_SIZES: [f32; 7] = [16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0];
 /// Marge de recherche autour de l'alignement bord droit / ligne de base.
 const ALIGN_X: i32 = 2;
 const ALIGN_Y: i32 = 1;
+/// Fenêtre large essayée pour chaque cellule. Elle couvre les nombres à deux
+/// chiffres comme « 20 », même si la fenêtre étroite du profil les coupe.
+const WIDE_WINDOW: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct Template {
@@ -131,9 +134,14 @@ pub fn read_count(
             windows.push(window);
         }
     }
+    if !windows.contains(&WIDE_WINDOW) {
+        windows.push(WIDE_WINDOW);
+    }
 
-    let mut best: Option<CountReading> = None;
+    let mut base_best: Option<CountReading> = None;
+    let mut wide_best: Option<CountReading> = None;
     let mut zero: Option<CountReading> = None;
+
     for window in windows {
         let reading = read_count_window(roi, baseline, window, templates, debug);
         if reading.actual_pixels == 0 {
@@ -142,16 +150,42 @@ pub fn read_count(
             }
             continue;
         }
-        if best
+
+        if window == WIDE_WINDOW {
+            if wide_best
+                .as_ref()
+                .map_or(true, |current| reading.score > current.score)
+            {
+                wide_best = Some(reading);
+            }
+        } else if base_best
             .as_ref()
             .map_or(true, |current| reading.score > current.score)
         {
-            best = Some(reading);
+            base_best = Some(reading);
         }
     }
 
-    if let Some(best) = best {
-        return best;
+    if let Some(base) = base_best {
+        // La fenêtre étroite est plus fiable près des icônes blanches, mais
+        // elle peut ne garder que le « 0 » d'un « 20 ». Si le candidat étroit
+        // est exactement zéro et que la fenêtre large trouve un nombre à deux
+        // chiffres avec un score élevé, on prend la fenêtre large.
+        let narrow_only_zero = base.best_candidate == Some(0);
+        if narrow_only_zero {
+            if let Some(wide) = &wide_best {
+                if let Some(candidate) = wide.best_candidate {
+                    if candidate >= 10 && wide.score >= 0.75 {
+                        return wide.clone();
+                    }
+                }
+            }
+        }
+        return base;
+    }
+
+    if let Some(wide) = wide_best {
+        return wide;
     }
 
     if let Some(mut zero) = zero {
@@ -537,8 +571,24 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 26, &templates, false);
+        let reading = read_count(&roi, 14, 22, &templates, false);
         assert_eq!(reading.best_candidate, Some(20));
+    }
+
+    #[test]
+    fn reads_20_in_colored_columns() {
+        let templates = TemplateSet::load().expect("templates");
+        let fixtures: [&[u8]; 2] = [
+            &include_bytes!("../../tests/fixtures/emerald_normal_20.png")[..],
+            &include_bytes!("../../tests/fixtures/ruby_normal_20.png")[..],
+        ];
+        for bytes in fixtures {
+            let roi = image::load_from_memory(bytes)
+                .expect("fixture PNG")
+                .to_rgb8();
+            let reading = read_count(&roi, 14, 22, &templates, false);
+            assert_eq!(reading.best_candidate, Some(20));
+        }
     }
 
     #[test]
