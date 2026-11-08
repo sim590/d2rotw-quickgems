@@ -1,5 +1,6 @@
 mod config;
 mod executor;
+mod hotkeys;
 mod logging;
 mod planner;
 mod platform;

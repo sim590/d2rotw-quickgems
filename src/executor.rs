@@ -112,6 +112,7 @@ pub fn run_live(
     templates: &TemplateSet,
     options: RunOptions,
 ) -> Result<()> {
+    let _terminal_guard = crate::hotkeys::start_terminal();
     let x11 = X11::new()?;
     let window = x11.find_game_window()?;
     let mut logger = Logger::new();
@@ -233,7 +234,7 @@ fn run_live_inner(
 
     for step in 1..=options.max_transmutations {
         check_emergency(x11)?;
-        if x11.take_pause() {
+        if x11.take_pause() || crate::hotkeys::take_pause() {
             wait_for_resume(x11, window, profile, templates, logger, &mut counts)?;
         }
         check_focus(x11, window)?;
@@ -603,6 +604,9 @@ fn check_focus(x11: &X11, window: &GameWindow) -> Result<()> {
 }
 
 fn check_emergency(x11: &X11) -> Result<()> {
+    if crate::hotkeys::stop_requested() {
+        return Err(safety("arrêt d'urgence demandé (F9/Ctrl+C terminal)"));
+    }
     if x11.emergency_requested()? {
         return Err(safety("arrêt d'urgence demandé (F9)"));
     }
@@ -692,17 +696,18 @@ fn wait_for_resume(
     logger: &mut Logger,
     counts: &mut planner::Counts,
 ) -> Result<()> {
-    logger.log("Pause: F8 pour reprendre, F9 pour arrêter.");
+    logger.log("Pause: F8 pour reprendre, F9/Ctrl+C pour arrêter.");
     loop {
-        if x11.emergency_requested()? {
-            return Err(safety("arrêt d'urgence demandé (F9)"));
+        if crate::hotkeys::stop_requested() || x11.emergency_requested()? {
+            return Err(safety("arrêt d'urgence demandé (F9/Ctrl+C)"));
         }
-        if x11.take_pause() {
+        if x11.take_pause() || crate::hotkeys::take_pause() {
             logger.log("Reprise demandée; relecture de la table et du cube...");
             match reload_state(x11, window, profile, templates) {
                 Ok(new_counts) => {
                     *counts = new_counts;
                     let _ = x11.take_pause();
+                    let _ = crate::hotkeys::take_pause();
                     logger.log(format!(
                         "Reprise: total table {}",
                         counts.iter().flatten().sum::<u32>()
