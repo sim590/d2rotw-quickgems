@@ -1,20 +1,50 @@
 # Prescription des quantités minimales à conserver pour chaque type de gemme
 # et chaque palier. Le planificateur ne descend jamais sous ces seuils.
 #
-# Ordre des paliers : abîmé, imparfait, normal, sans défaut, parfait.
+# Tous les champs sont facultatifs. Un champ omis vaut 0, et un type sans
+# surcharge prend toutes les valeurs de [keep.default]. Valeurs permises:
+# 0 à 999.
+#
+# Ordre des paliers: abîme, imparfait, normal, sans défaut, parfait.
+# Le palier parfait est accepté mais n'a aucun effet: une gemme parfaite n'est
+# jamais convertie, donc elle n'est jamais une source à protéger.
 
 [keep.default]
 abime = 10
 imparfait = 5
 normal = 20
 sans_defaut = 5
+# parfait = 0
 
 # Surcharges optionnelles par type. Les champs omis prennent la valeur du
-# défaut ci-dessus.
+# défaut ci-dessus. Types reconnus: diamant, emeraude, rubis, topaze,
+# amethyste, saphir, crane.
+#
+# Exemple minimal: seuls les champs utiles.
 # [keep.diamant]
 # abime = 20
 # imparfait = 10
 
+# Exemple complet: tous les champs d'un même type.
 # [keep.crane]
 # abime = 20
 # imparfait = 10
+# normal = 30
+# sans_defaut = 3
+# parfait = 5
+
+# Les autres types acceptent le même format.
+# [keep.emeraude]
+# normal = 25
+#
+# [keep.rubis]
+# abime = 15
+#
+# [keep.topaze]
+# sans_defaut = 2
+#
+# [keep.amethyste]
+# imparfait = 8
+#
+# [keep.saphir]
+# normal = 30
