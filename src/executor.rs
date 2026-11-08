@@ -583,7 +583,7 @@ fn wait_cell(
 /// acceptable; c'est le cas typique d'un chiffre à 36 lu à 0.78 de score mais
 /// à 0.014 de marge.
 fn expected_accepted(reading: &CountReading, expected: u16) -> bool {
-    reading.best_candidate == Some(expected) && reading.score >= 0.75
+    reading.best_candidate == Some(expected) && reading.score >= 0.70
 }
 
 fn read_cube_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<CubeReading> {
@@ -890,14 +890,18 @@ mod tests {
 
     #[test]
     fn accepts_expected_value_with_low_margin_but_high_score() {
-        let reading = reading(36, 0.782, 0.014);
-        assert!(expected_accepted(&reading, 36));
-        assert!(!expected_accepted(&reading, 35));
+        let high = reading(36, 0.782, 0.014);
+        assert!(expected_accepted(&high, 36));
+        assert!(!expected_accepted(&high, 35));
+
+        // Cas Émeraude/Parfait observé en live.
+        let borderline = reading(36, 0.737, 0.062);
+        assert!(expected_accepted(&borderline, 36));
     }
 
     #[test]
     fn rejects_expected_value_with_low_score() {
-        let reading = reading(36, 0.70, 0.05);
+        let reading = reading(36, 0.65, 0.05);
         assert!(!expected_accepted(&reading, 36));
     }
 
