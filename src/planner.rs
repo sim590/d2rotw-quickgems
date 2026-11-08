@@ -26,10 +26,11 @@ pub struct Plan {
     pub conversions: [[u32; 4]; 7],
 }
 
-/// Prochaine conversion valide. On balaie les paliers du bas vers le haut,
-/// puis les types de gemmes.
-pub fn next_action(counts: &Counts, keep: &Keep) -> Option<Action> {
-    for tier in 0..4 {
+/// Prochaine conversion valide. On balaie les paliers du bas vers le haut à
+/// partir de `start_tier`, puis les types de gemmes. Les paliers inférieurs à
+/// `start_tier` ne sont jamais convertis.
+pub fn next_action(counts: &Counts, keep: &Keep, start_tier: usize) -> Option<Action> {
+    for tier in start_tier..4 {
         for gem_type in 0..7 {
             if counts[gem_type][tier] >= keep[gem_type][tier].saturating_add(3) {
                 return Some(Action { gem_type, tier });
@@ -40,20 +41,20 @@ pub fn next_action(counts: &Counts, keep: &Keep) -> Option<Action> {
 }
 
 /// Projette toutes les conversions possibles à partir d'un état initial.
-pub fn project(counts: Counts, keep: &Keep) -> Plan {
-    project_limited(counts, keep, usize::MAX)
+pub fn project(counts: Counts, keep: &Keep, start_tier: usize) -> Plan {
+    project_limited(counts, keep, usize::MAX, start_tier)
 }
 
 /// Projette au plus `max_actions` conversions. Sert à calculer un budget avant
 /// de lancer un lot live.
-pub fn project_limited(counts: Counts, keep: &Keep, max_actions: usize) -> Plan {
+pub fn project_limited(counts: Counts, keep: &Keep, max_actions: usize, start_tier: usize) -> Plan {
     let initial_counts = counts;
     let mut final_counts = counts;
     let mut actions = Vec::new();
     let mut conversions = [[0u32; 4]; 7];
 
     while actions.len() < max_actions {
-        let Some(action) = next_action(&final_counts, keep) else {
+        let Some(action) = next_action(&final_counts, keep, start_tier) else {
             break;
         };
         final_counts[action.gem_type][action.tier] -= 3;
@@ -102,11 +103,11 @@ mod tests {
         let mut keep = empty_keep();
         counts[0][0] = 3;
         keep[0][0] = 1;
-        assert_eq!(next_action(&counts, &keep), None);
+        assert_eq!(next_action(&counts, &keep, 0), None);
 
         counts[0][0] = 4;
         assert_eq!(
-            next_action(&counts, &keep),
+            next_action(&counts, &keep, 0),
             Some(Action {
                 gem_type: 0,
                 tier: 0
@@ -122,12 +123,12 @@ mod tests {
         counts[0][1] = 5;
         keep[0][1] = 3;
 
-        let plan = project(counts, &keep);
+        let plan = project(counts, &keep, 0);
         assert_eq!(plan.final_counts[0][0], 0);
         assert_eq!(plan.final_counts[0][1], 3);
         assert_eq!(plan.final_counts[0][2], 1);
         assert_eq!(plan.conversion_count(), 2);
-        assert!(next_action(&plan.final_counts, &keep).is_none());
+        assert!(next_action(&plan.final_counts, &keep, 0).is_none());
     }
 
     #[test]
@@ -136,12 +137,12 @@ mod tests {
         let keep = empty_keep();
         counts[0][0] = 9;
 
-        let plan = project(counts, &keep);
+        let plan = project(counts, &keep, 0);
         assert_eq!(plan.final_counts[0][0], 0);
         assert_eq!(plan.final_counts[0][1], 0);
         assert_eq!(plan.final_counts[0][2], 1);
         assert_eq!(plan.conversion_count(), 4);
-        assert!(next_action(&plan.final_counts, &keep).is_none());
+        assert!(next_action(&plan.final_counts, &keep, 0).is_none());
     }
 
     #[test]
@@ -150,10 +151,25 @@ mod tests {
         let keep = empty_keep();
         counts[0][0] = 9;
 
-        let plan = project_limited(counts, &keep, 2);
+        let plan = project_limited(counts, &keep, 2, 0);
         assert_eq!(plan.conversion_count(), 2);
         assert_eq!(plan.final_counts[0][0], 3);
         assert_eq!(plan.final_counts[0][1], 2);
+    }
+
+    #[test]
+    fn start_tier_skips_lower_tiers() {
+        let mut counts = empty_counts();
+        let mut keep = empty_keep();
+        counts[0][0] = 3;
+        counts[0][1] = 6;
+        keep[0][1] = 3;
+
+        let plan = project(counts, &keep, 1);
+        assert_eq!(plan.final_counts[0][0], 3); // abîmé intact
+        assert_eq!(plan.final_counts[0][1], 3);
+        assert_eq!(plan.final_counts[0][2], 1);
+        assert_eq!(plan.conversion_count(), 1);
     }
 
     #[test]
@@ -168,7 +184,7 @@ mod tests {
         }
 
         let initial = counts;
-        let plan = project(counts, &keep);
+        let plan = project(counts, &keep, 0);
         for gem_type in 0..7 {
             for tier in 0..5 {
                 assert!(
@@ -178,6 +194,6 @@ mod tests {
                 );
             }
         }
-        assert!(next_action(&plan.final_counts, &keep).is_none());
+        assert!(next_action(&plan.final_counts, &keep, 0).is_none());
     }
 }

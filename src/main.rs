@@ -59,6 +59,14 @@ enum Command {
         /// Limite la projection à N transmutations (budget).
         #[arg(long)]
         max_transmutations: Option<usize>,
+        /// Palier source minimal (0=abîmé, 1=imparfait, 2=normal, 3=sans défaut).
+        #[arg(
+            long,
+            default_value_t = 0,
+            value_parser = parse_start_tier,
+            visible_alias = "depuis-palier"
+        )]
+        start_tier: usize,
         /// Affiche les détails de lecture par cellule.
         #[arg(long)]
         debug: bool,
@@ -89,6 +97,14 @@ enum Command {
         /// Nombre maximal de transmutations à exécuter.
         #[arg(long, default_value_t = 1)]
         max_transmutations: usize,
+        /// Palier source minimal (0=abîmé, 1=imparfait, 2=normal, 3=sans défaut).
+        #[arg(
+            long,
+            default_value_t = 0,
+            value_parser = parse_start_tier,
+            visible_alias = "depuis-palier"
+        )]
+        start_tier: usize,
         /// Relit les 35 cellules toutes les N actions (0 désactive l'audit).
         #[arg(long, default_value_t = 5)]
         audit_every: usize,
@@ -111,8 +127,16 @@ fn main() -> Result<()> {
             profile,
             config,
             max_transmutations,
+            start_tier,
             debug,
-        } => plan(&image, &profile, &config, max_transmutations, debug),
+        } => plan(
+            &image,
+            &profile,
+            &config,
+            max_transmutations,
+            start_tier,
+            debug,
+        ),
         Command::Capture { output, profile } => capture_live(&output, &profile),
         Command::Run {
             image,
@@ -120,6 +144,7 @@ fn main() -> Result<()> {
             config,
             execute,
             max_transmutations,
+            start_tier,
             audit_every,
             debug,
         } => run(
@@ -128,10 +153,25 @@ fn main() -> Result<()> {
             &config,
             execute,
             max_transmutations,
+            start_tier,
             audit_every,
             debug,
         ),
     }
+}
+
+fn parse_start_tier(value: &str) -> std::result::Result<usize, String> {
+    let tier: usize = value
+        .parse()
+        .map_err(|_| "palier invalide; utilise un nombre de 0 à 3".to_string())?;
+    if tier > 3 {
+        return Err(
+            "le palier source doit être entre 0 (abîmé) et 3 (sans défaut); \
+             le parfait ne peut pas être converti"
+                .to_string(),
+        );
+    }
+    Ok(tier)
 }
 
 fn capture_live(output: &Path, profile_path: &Path) -> Result<()> {
@@ -168,6 +208,7 @@ fn run(
     config_path: &Path,
     execute: bool,
     max_transmutations: usize,
+    start_tier: usize,
     audit_every: usize,
     debug: bool,
 ) -> Result<()> {
@@ -177,6 +218,7 @@ fn run(
     let options = executor::RunOptions {
         execute,
         max_transmutations,
+        start_tier,
         audit_every,
         debug,
     };
@@ -223,6 +265,7 @@ fn plan(
     profile_path: &Path,
     config_path: &Path,
     max_transmutations: Option<usize>,
+    start_tier: usize,
     debug: bool,
 ) -> Result<()> {
     let profile = Profile::load(profile_path)?;
@@ -251,8 +294,8 @@ fn plan(
     let keep = config.keep_matrix()?;
     let counts = counts_from_table(&table)?;
     let plan = match max_transmutations {
-        Some(max) => planner::project_limited(counts, &keep, max),
-        None => planner::project(counts, &keep),
+        Some(max) => planner::project_limited(counts, &keep, max, start_tier),
+        None => planner::project(counts, &keep, start_tier),
     };
     let conversions = plan.conversion_count();
     let source_gems = conversions.saturating_mul(3);
@@ -262,6 +305,7 @@ fn plan(
     println!("\nLimites keep (minimum à conserver):");
     print_keep(&keep);
 
+    println!("\nDépart: {} ({start_tier})", TIERS[start_tier]);
     println!("\nPlan: {conversions} transmutations");
     if let Some(max) = max_transmutations {
         println!("(Projection limitée à {max} actions.)");

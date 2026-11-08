@@ -24,6 +24,7 @@ use crate::vision::table::{self, GEM_TYPES, TIERS};
 pub struct RunOptions {
     pub execute: bool,
     pub max_transmutations: usize,
+    pub start_tier: usize,
     pub audit_every: usize,
     pub debug: bool,
 }
@@ -75,7 +76,7 @@ pub fn run_from_image(
     let cube = cube::read_cube(&image, profile)?;
     let counts = crate::counts_from_table(&table)?;
     let keep = config.keep_matrix()?;
-    let plan = planner::project(counts.clone(), &keep);
+    let plan = planner::project(counts.clone(), &keep, options.start_tier);
 
     logger.log(format!("Table lue: {} gemmes connues", table.known_total()));
     logger.log(format!(
@@ -87,8 +88,12 @@ pub fn run_from_image(
         plan.conversion_count(),
         plan.total_perfect_gain()
     ));
+    logger.log(format!(
+        "Départ: {} ({})",
+        TIERS[options.start_tier], options.start_tier
+    ));
 
-    if let Some(action) = planner::next_action(&counts, &keep) {
+    if let Some(action) = planner::next_action(&counts, &keep, options.start_tier) {
         let x = profile.panel.x
             + profile.table.count_right_edges[action.gem_type]
             + profile.click.source_dx;
@@ -205,15 +210,19 @@ fn run_live_inner(
 
     let counts = crate::counts_from_table(&table)?;
     let keep = config.keep_matrix()?;
-    let plan = planner::project(counts.clone(), &keep);
+    let plan = planner::project(counts.clone(), &keep, options.start_tier);
     logger.log(format!(
         "Plan: {} transmutations, {} parfaites gagnées",
         plan.conversion_count(),
         plan.total_perfect_gain()
     ));
+    logger.log(format!(
+        "Départ: {} ({})",
+        TIERS[options.start_tier], options.start_tier
+    ));
 
     if !options.execute {
-        if let Some(action) = planner::next_action(&counts, &keep) {
+        if let Some(action) = planner::next_action(&counts, &keep, options.start_tier) {
             let (x, y) = cell_click_point(window, profile, action.gem_type, action.tier);
             logger.log(format!(
                 "Mode simulation: première action {} {} -> {} (clic source à {x},{y})",
@@ -239,7 +248,7 @@ fn run_live_inner(
         }
         check_focus(x11, window)?;
 
-        let Some(action) = planner::next_action(&counts, &keep) else {
+        let Some(action) = planner::next_action(&counts, &keep, options.start_tier) else {
             logger.log("Plus aucune transmutation valide.");
             break;
         };
