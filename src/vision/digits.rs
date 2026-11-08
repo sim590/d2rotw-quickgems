@@ -293,8 +293,9 @@ fn read_count_window(
 /// Règle de confiance commune au calcul et à l'accesseur.
 fn is_confident_score(score: f32, margin: f32) -> bool {
     // Un score élevé avec une petite marge reste fiable; un score plus bas
-    // exige une marge plus grande pour éviter de deviner.
-    (score >= 0.75 && margin >= 0.02) || (score >= 0.40 && margin >= 0.04)
+    // exige une marge plus grande pour éviter de deviner. Le seuil de 0.01
+    // couvre les nombres proches (ex. 36 vs 35) sur les icônes colorées.
+    (score >= 0.75 && margin >= 0.01) || (score >= 0.40 && margin >= 0.04)
 }
 
 /// Construit le masque des chiffres en ignorant les pixels colorés de l'icône
@@ -525,6 +526,24 @@ fn render_text(font: &Font, text: &str, size_px: f32) -> GrayImage {
 }
 
 /// Réduit une image rendue à son masque binaire serré.
+#[cfg(test)]
+mod tests {
+    use super::is_confident_score;
+
+    #[test]
+    fn accepts_high_score_with_low_margin() {
+        assert!(is_confident_score(0.782, 0.014));
+        assert!(!is_confident_score(0.782, 0.005));
+        assert!(!is_confident_score(0.70, 0.014));
+    }
+
+    #[test]
+    fn keeps_stricter_rule_for_lower_scores() {
+        assert!(is_confident_score(0.50, 0.05));
+        assert!(!is_confident_score(0.50, 0.03));
+    }
+}
+
 fn tight_mask(image: &GrayImage) -> Option<(u32, u32, Vec<bool>)> {
     let width = image.width();
     let height = image.height();
