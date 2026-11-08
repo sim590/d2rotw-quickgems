@@ -1,0 +1,407 @@
+//! Capture et injection d'entrées X11/XWayland.
+//!
+//! D2R sous Proton est un client XWayland. On capture le drawable de la
+//! fenêtre et on injecte les clics avec l'extension XTest.
+
+use std::thread::sleep;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use image::{ImageBuffer, Rgb, RgbImage};
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{
+    AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, ImageFormat,
+    InputFocus, StackMode, Window,
+};
+use x11rb::protocol::xtest::ConnectionExt as _;
+use x11rb::rust_connection::RustConnection;
+
+const XTEST_MOTION_NOTIFY: u8 = 6;
+const XTEST_BUTTON_PRESS: u8 = 4;
+const XTEST_BUTTON_RELEASE: u8 = 5;
+const XTEST_KEY_PRESS: u8 = 2;
+const XTEST_KEY_RELEASE: u8 = 3;
+
+const KEYSYM_CONTROL_L: u32 = 0xffe3;
+const KEYSYM_SHIFT_L: u32 = 0xffe1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Modifiers {
+    None,
+    CtrlShift,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+}
+
+impl MouseButton {
+    fn code(self) -> u8 {
+        match self {
+            MouseButton::Left => 1,
+            MouseButton::Right => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GameWindow {
+    pub id: Window,
+    pub title: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub struct X11 {
+    connection: RustConnection,
+    root: Window,
+    net_client_list: u32,
+    net_wm_name: u32,
+    utf8_string: u32,
+    net_active_window: u32,
+    ctrl_keycode: u8,
+    shift_keycode: u8,
+}
+
+impl X11 {
+    pub fn new() -> Result<Self> {
+        let (connection, screen_number) =
+            x11rb::connect(None).map_err(|error| anyhow!("connexion X11 impossible: {error}"))?;
+        let root = connection.setup().roots[screen_number].root;
+        let net_client_list = intern_atom(&connection, b"_NET_CLIENT_LIST")?;
+        let net_wm_name = intern_atom(&connection, b"_NET_WM_NAME")?;
+        let utf8_string = intern_atom(&connection, b"UTF8_STRING")?;
+        let net_active_window = intern_atom(&connection, b"_NET_ACTIVE_WINDOW")?;
+
+        let mut x11 = Self {
+            connection,
+            root,
+            net_client_list,
+            net_wm_name,
+            utf8_string,
+            net_active_window,
+            ctrl_keycode: 0,
+            shift_keycode: 0,
+        };
+        x11.ctrl_keycode = x11.find_keycode(KEYSYM_CONTROL_L)?;
+        x11.shift_keycode = x11.find_keycode(KEYSYM_SHIFT_L)?;
+        Ok(x11)
+    }
+
+    pub fn find_game_window(&self) -> Result<GameWindow> {
+        if let Some(window) = self.find_by_client_list()? {
+            return self.window_info(window);
+        }
+        if let Some(window) = self.find_in_tree(self.root, 3)? {
+            return self.window_info(window);
+        }
+        bail!("fenêtre de Diablo II introuvable")
+    }
+
+    pub fn capture_window(&self, window: &GameWindow) -> Result<RgbImage> {
+        let reply = self
+            .connection
+            .get_image(
+                ImageFormat::Z_PIXMAP,
+                window.id,
+                0,
+                0,
+                window.width as u16,
+                window.height as u16,
+                !0,
+            )
+            .context("XGetImage a échoué")?
+            .reply()
+            .context("XGetImage n'a pas retourné d'image")?;
+
+        let pixel_count = window.width as usize * window.height as usize;
+        if pixel_count == 0 || reply.data.len() % pixel_count != 0 {
+            bail!(
+                "format d'image X11 inattendu: {} octets pour {} pixels",
+                reply.data.len(),
+                pixel_count
+            );
+        }
+        let bytes_per_pixel = reply.data.len() / pixel_count;
+        if bytes_per_pixel != 3 && bytes_per_pixel != 4 {
+            bail!("format d'image X11 non supporté: {bytes_per_pixel} octets/pixel");
+        }
+
+        let mut rgb = Vec::with_capacity(pixel_count * 3);
+        for pixel in reply.data.chunks_exact(bytes_per_pixel) {
+            // X11 expose souvent du BGR en little-endian.
+            rgb.push(pixel[2]);
+            rgb.push(pixel[1]);
+            rgb.push(pixel[0]);
+        }
+
+        ImageBuffer::<Rgb<u8>, _>::from_raw(window.width, window.height, rgb)
+            .ok_or_else(|| anyhow!("buffer RGB invalide"))
+    }
+
+    pub fn focus_window(&self, window: &GameWindow) -> Result<()> {
+        // Demande au WM de donner le focus, puis force le focus clavier.
+        let event =
+            ClientMessageEvent::new(32, window.id, self.net_active_window, [2u32, 0, 0, 0, 0]);
+        self.connection
+            .send_event(
+                false,
+                self.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                event,
+            )
+            .context("impossible d'envoyer _NET_ACTIVE_WINDOW")?;
+        self.connection
+            .configure_window(
+                window.id,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )
+            .context("impossible de lever la fenêtre du jeu")?;
+        self.connection
+            .set_input_focus(InputFocus::PARENT, window.id, 0u32)
+            .context("impossible de donner le focus au jeu")?;
+        self.connection.flush().context("flush X11 impossible")?;
+        sleep(Duration::from_millis(150));
+        Ok(())
+    }
+
+    pub fn is_focused(&self, window: &GameWindow) -> Result<bool> {
+        let focus = self
+            .connection
+            .get_input_focus()
+            .context("XGetInputFocus a échoué")?
+            .reply()
+            .context("XGetInputFocus n'a pas retourné de réponse")?
+            .focus;
+        if focus == 0 {
+            return Ok(false);
+        }
+        self.is_descendant(focus, window.id)
+    }
+
+    pub fn click(&self, x: i32, y: i32, button: MouseButton, modifiers: Modifiers) -> Result<()> {
+        self.move_pointer(x, y)?;
+        sleep(Duration::from_millis(30));
+
+        self.press_modifiers(modifiers)?;
+        let click_result = self.press_and_release_button(button);
+        let release_result = self.release_modifiers(modifiers);
+        click_result?;
+        release_result?;
+        Ok(())
+    }
+
+    pub fn move_pointer(&self, x: i32, y: i32) -> Result<()> {
+        self.connection
+            .xtest_fake_input(XTEST_MOTION_NOTIFY, 0, 0, self.root, x as i16, y as i16, 0)
+            .context("XTest motion a échoué")?;
+        self.connection.flush().context("flush X11 impossible")?;
+        Ok(())
+    }
+
+    fn press_and_release_button(&self, button: MouseButton) -> Result<()> {
+        self.connection
+            .xtest_fake_input(XTEST_BUTTON_PRESS, button.code(), 0, self.root, 0, 0, 0)
+            .context("XTest button press a échoué")?;
+        self.connection.flush().context("flush X11 impossible")?;
+        sleep(Duration::from_millis(40));
+        self.connection
+            .xtest_fake_input(XTEST_BUTTON_RELEASE, button.code(), 0, self.root, 0, 0, 0)
+            .context("XTest button release a échoué")?;
+        self.connection.flush().context("flush X11 impossible")?;
+        sleep(Duration::from_millis(10));
+        Ok(())
+    }
+
+    fn press_modifiers(&self, modifiers: Modifiers) -> Result<()> {
+        if modifiers == Modifiers::CtrlShift {
+            self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
+            self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
+            self.connection.flush().context("flush X11 impossible")?;
+            sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+
+    fn release_modifiers(&self, modifiers: Modifiers) -> Result<()> {
+        if modifiers == Modifiers::CtrlShift {
+            self.key(XTEST_KEY_RELEASE, self.shift_keycode)?;
+            self.key(XTEST_KEY_RELEASE, self.ctrl_keycode)?;
+            self.connection.flush().context("flush X11 impossible")?;
+        }
+        Ok(())
+    }
+
+    fn key(&self, event_type: u8, keycode: u8) -> Result<()> {
+        self.connection
+            .xtest_fake_input(event_type, keycode, 0, self.root, 0, 0, 0)
+            .context("XTest key event a échoué")?;
+        Ok(())
+    }
+
+    fn find_keycode(&self, keysym: u32) -> Result<u8> {
+        let setup = self.connection.setup();
+        let min_keycode = setup.min_keycode;
+        let count = setup.max_keycode - min_keycode + 1;
+        let reply = self
+            .connection
+            .get_keyboard_mapping(min_keycode, count)
+            .context("XGetKeyboardMapping a échoué")?
+            .reply()
+            .context("XGetKeyboardMapping n'a pas retourné de réponse")?;
+        let per_keycode = reply.keysyms_per_keycode as usize;
+
+        for (index, keysyms) in reply.keysyms.chunks(per_keycode).enumerate() {
+            if keysyms.iter().any(|candidate| *candidate == keysym) {
+                return Ok(min_keycode + index as u8);
+            }
+        }
+        bail!("keysym {keysym:#x} introuvable dans le clavier X11")
+    }
+
+    fn is_descendant(&self, mut child: Window, ancestor: Window) -> Result<bool> {
+        loop {
+            if child == ancestor {
+                return Ok(true);
+            }
+            if child == 0 || child == self.root {
+                return Ok(false);
+            }
+            let tree = self
+                .connection
+                .query_tree(child)
+                .context("XQueryTree a échoué")?
+                .reply()
+                .context("XQueryTree n'a pas retourné de réponse")?;
+            if tree.parent == child {
+                return Ok(false);
+            }
+            child = tree.parent;
+        }
+    }
+
+    fn find_by_client_list(&self) -> Result<Option<Window>> {
+        let reply = self
+            .connection
+            .get_property(
+                false,
+                self.root,
+                self.net_client_list,
+                AtomEnum::WINDOW,
+                0,
+                u32::MAX,
+            )
+            .context("XGetProperty _NET_CLIENT_LIST a échoué")?
+            .reply()
+            .context("_NET_CLIENT_LIST sans réponse")?;
+        if let Some(values) = reply.value32() {
+            for window in values {
+                if self.is_game_window(window)? {
+                    return Ok(Some(window));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn find_in_tree(&self, window: Window, depth: u32) -> Result<Option<Window>> {
+        if self.is_game_window(window)? {
+            return Ok(Some(window));
+        }
+        if depth == 0 {
+            return Ok(None);
+        }
+        let tree = self
+            .connection
+            .query_tree(window)
+            .context("XQueryTree a échoué")?
+            .reply()
+            .context("XQueryTree sans réponse")?;
+        for child in tree.children {
+            if let Some(found) = self.find_in_tree(child, depth - 1)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    fn is_game_window(&self, window: Window) -> Result<bool> {
+        let title = self.window_title(window).unwrap_or_default().to_lowercase();
+        let class = self.window_class(window).unwrap_or_default().to_lowercase();
+        Ok(
+            (title.contains("diablo ii") && title.contains("resurrected"))
+                || (class == "steam_app_default" && title.contains("diablo")),
+        )
+    }
+
+    fn window_title(&self, window: Window) -> Result<String> {
+        let reply = self
+            .connection
+            .get_property(false, window, self.net_wm_name, self.utf8_string, 0, 1024)
+            .context("XGetProperty _NET_WM_NAME a échoué")?
+            .reply()
+            .context("_NET_WM_NAME sans réponse")?;
+        if !reply.value.is_empty() {
+            return Ok(String::from_utf8_lossy(&reply.value).to_string());
+        }
+        let reply = self
+            .connection
+            .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)
+            .context("XGetProperty WM_NAME a échoué")?
+            .reply()
+            .context("WM_NAME sans réponse")?;
+        Ok(String::from_utf8_lossy(&reply.value).to_string())
+    }
+
+    fn window_class(&self, window: Window) -> Result<String> {
+        let reply = self
+            .connection
+            .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+            .context("XGetProperty WM_CLASS a échoué")?
+            .reply()
+            .context("WM_CLASS sans réponse")?;
+        let parts: Vec<&[u8]> = reply.value.split(|byte| *byte == 0).collect();
+        let value = parts
+            .get(1)
+            .or_else(|| parts.first())
+            .copied()
+            .unwrap_or_default();
+        Ok(String::from_utf8_lossy(value).to_string())
+    }
+
+    fn window_info(&self, window: Window) -> Result<GameWindow> {
+        let geometry = self
+            .connection
+            .get_geometry(window)
+            .context("XGetGeometry a échoué")?
+            .reply()
+            .context("XGetGeometry sans réponse")?;
+        let position = self
+            .connection
+            .translate_coordinates(window, self.root, 0, 0)
+            .context("XTranslateCoordinates a échoué")?
+            .reply()
+            .context("XTranslateCoordinates sans réponse")?;
+        Ok(GameWindow {
+            id: window,
+            title: self.window_title(window).unwrap_or_default(),
+            x: i32::from(position.dst_x),
+            y: i32::from(position.dst_y),
+            width: u32::from(geometry.width),
+            height: u32::from(geometry.height),
+        })
+    }
+}
+
+fn intern_atom(connection: &RustConnection, name: &[u8]) -> Result<u32> {
+    connection
+        .intern_atom(false, name)
+        .context("intern_atom a échoué")?
+        .reply()
+        .context("intern_atom sans réponse")
+        .map(|reply| reply.atom)
+}

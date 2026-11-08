@@ -1,9 +1,13 @@
 mod config;
+mod executor;
 mod planner;
+mod platform;
 mod profile;
 mod vision;
 
 use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -54,6 +58,36 @@ enum Command {
         #[arg(long)]
         debug: bool,
     },
+    /// Capture la fenêtre du jeu dans un PNG (diagnostic, aucun clic).
+    Capture {
+        /// Fichier PNG de sortie.
+        #[arg(long)]
+        output: PathBuf,
+        /// Profil de disposition (TOML).
+        #[arg(long, default_value = "profiles/2560x1440.toml")]
+        profile: PathBuf,
+    },
+    /// Lit le jeu en direct et exécute les transmutations (simulation par défaut).
+    Run {
+        /// Utilise une capture PNG au lieu de la fenêtre X11 (simulation seulement).
+        #[arg(long)]
+        image: Option<PathBuf>,
+        /// Profil de disposition (TOML).
+        #[arg(long, default_value = "profiles/2560x1440.toml")]
+        profile: PathBuf,
+        /// Prescription des quantités minimales à conserver.
+        #[arg(long, default_value = "quickgems.toml")]
+        config: PathBuf,
+        /// Fait réellement les clics. Sans ce drapeau, le programme simule.
+        #[arg(long)]
+        execute: bool,
+        /// Nombre maximal de transmutations à exécuter.
+        #[arg(long, default_value_t = 1)]
+        max_transmutations: usize,
+        /// Affiche les détails de lecture par cellule.
+        #[arg(long)]
+        debug: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -70,6 +104,73 @@ fn main() -> Result<()> {
             config,
             debug,
         } => plan(&image, &profile, &config, debug),
+        Command::Capture { output, profile } => capture_live(&output, &profile),
+        Command::Run {
+            image,
+            profile,
+            config,
+            execute,
+            max_transmutations,
+            debug,
+        } => run(
+            image.as_deref(),
+            &profile,
+            &config,
+            execute,
+            max_transmutations,
+            debug,
+        ),
+    }
+}
+
+fn capture_live(output: &Path, profile_path: &Path) -> Result<()> {
+    let profile = Profile::load(profile_path)?;
+    let x11 = platform::x11::X11::new()?;
+    let window = x11.find_game_window()?;
+    println!(
+        "Fenêtre: {} ({}x{}) @ ({}, {})",
+        window.title, window.width, window.height, window.x, window.y
+    );
+    if window.width != profile.image_width || window.height != profile.image_height {
+        bail!(
+            "la fenêtre du jeu fait {}x{}, mais le profil attend {}x{}",
+            window.width,
+            window.height,
+            profile.image_width,
+            profile.image_height
+        );
+    }
+
+    x11.focus_window(&window)?;
+    sleep(Duration::from_millis(200));
+    let image = x11.capture_window(&window)?;
+    image
+        .save(output)
+        .with_context(|| format!("impossible d'écrire la capture {}", output.display()))?;
+    println!("Capture écrite: {}", output.display());
+    Ok(())
+}
+
+fn run(
+    image_path: Option<&Path>,
+    profile_path: &Path,
+    config_path: &Path,
+    execute: bool,
+    max_transmutations: usize,
+    debug: bool,
+) -> Result<()> {
+    let profile = Profile::load(profile_path)?;
+    let config = Config::load(config_path)?;
+    let templates = TemplateSet::load()?;
+    let options = executor::RunOptions {
+        execute,
+        max_transmutations,
+        debug,
+    };
+
+    match image_path {
+        Some(path) => executor::run_from_image(path, &profile, &config, &templates, options),
+        None => executor::run_live(&profile, &config, &templates, options),
     }
 }
 
@@ -154,7 +255,7 @@ fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool)
     Ok(())
 }
 
-fn load_game_image(image_path: &Path, profile: &Profile) -> Result<RgbImage> {
+pub(crate) fn load_game_image(image_path: &Path, profile: &Profile) -> Result<RgbImage> {
     let original = image::open(image_path)
         .with_context(|| format!("impossible d'ouvrir l'image {}", image_path.display()))?
         .to_rgb8();
@@ -175,7 +276,7 @@ fn load_game_image(image_path: &Path, profile: &Profile) -> Result<RgbImage> {
     )
 }
 
-fn counts_from_table(table: &table::TableReading) -> Result<planner::Counts> {
+pub(crate) fn counts_from_table(table: &table::TableReading) -> Result<planner::Counts> {
     let mut counts = [[0u32; 5]; 7];
     for col in 0..7 {
         for row in 0..5 {

@@ -10,3 +10,4 @@ fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+x11rb = { version = "0.13", features = ["xtest"] }

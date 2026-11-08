@@ -26,6 +26,18 @@ roi_right = 4
 roi_top = -1
 roi_bottom = 18
 
+# Coordonnées de clic, relatives au panneau.
+[click]
+# Centre d'une cellule source : bord droit du nombre - 30 px, haut - 16 px.
+source_dx = -30
+source_dy = -16
+# Centre du bouton « Transmuter ».
+transmute_x = 413
+transmute_y = 870
+# Point neutre dans la zone décorative gauche du panneau.
+park_x = 250
+park_y = 660
+
 # Grille du cube horadrique : 3 colonnes x 4 rangées, cases de 61x61 px.
 [[cube.slots]]
 x = 317

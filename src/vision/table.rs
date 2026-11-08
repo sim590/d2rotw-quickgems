@@ -3,7 +3,7 @@ use image::{imageops, RgbImage};
 
 use crate::profile::Profile;
 
-use super::digits::{self, TemplateSet};
+use super::digits::{self, CountReading, TemplateSet};
 
 pub const GEM_TYPES: [&str; 7] = [
     "Diamant",
@@ -36,38 +36,9 @@ pub fn read_table(
     let mut uncertain = Vec::new();
     let mut details = Vec::new();
 
-    let roi_width = (profile.table.roi_right - profile.table.roi_left) as u32;
-    let roi_height = (profile.table.roi_bottom - profile.table.roi_top) as u32;
-
     for row in 0..5 {
         for col in 0..7 {
-            let right = profile.panel.x + profile.table.count_right_edges[col];
-            let top = profile.panel.y + profile.table.count_tops[row];
-            let roi_x = right + profile.table.roi_left;
-            let roi_y = top + profile.table.roi_top;
-
-            if roi_x < 0
-                || roi_y < 0
-                || roi_x as u32 + roi_width > image.width()
-                || roi_y as u32 + roi_height > image.height()
-            {
-                bail!(
-                    "la zone de lecture de la cellule ({col},{row}) sort de l'image: \
-                     x={roi_x}, y={roi_y}, w={roi_width}, h={roi_height}"
-                );
-            }
-
-            let roi = imageops::crop_imm(image, roi_x as u32, roi_y as u32, roi_width, roi_height)
-                .to_image();
-
-            let baseline = (top + 13 - roi_y).max(0) as usize;
-            let reading = digits::read_count(
-                &roi,
-                baseline,
-                profile.table.count_windows[col],
-                templates,
-                debug,
-            );
+            let reading = read_cell(image, profile, templates, col, row, debug)?;
 
             if reading.is_confident() {
                 cells[col][row] = reading.number;
@@ -102,6 +73,47 @@ pub fn read_table(
         uncertain,
         details,
     })
+}
+
+/// Lit une seule cellule. Utilisé par l'exécuteur pour vérifier rapidement la
+/// source et la cible après un clic, sans relire les 35 cellules.
+pub fn read_cell(
+    image: &RgbImage,
+    profile: &Profile,
+    templates: &TemplateSet,
+    col: usize,
+    row: usize,
+    debug: bool,
+) -> Result<CountReading> {
+    let right = profile.panel.x + profile.table.count_right_edges[col];
+    let top = profile.panel.y + profile.table.count_tops[row];
+    let roi_x = right + profile.table.roi_left;
+    let roi_y = top + profile.table.roi_top;
+    let roi_width = (profile.table.roi_right - profile.table.roi_left) as u32;
+    let roi_height = (profile.table.roi_bottom - profile.table.roi_top) as u32;
+
+    if roi_x < 0
+        || roi_y < 0
+        || roi_x as u32 + roi_width > image.width()
+        || roi_y as u32 + roi_height > image.height()
+    {
+        bail!(
+            "la zone de lecture de la cellule ({col},{row}) sort de l'image: \
+             x={roi_x}, y={roi_y}, w={roi_width}, h={roi_height}"
+        );
+    }
+
+    let roi =
+        imageops::crop_imm(image, roi_x as u32, roi_y as u32, roi_width, roi_height).to_image();
+    let baseline = (top + 13 - roi_y).max(0) as usize;
+
+    Ok(digits::read_count(
+        &roi,
+        baseline,
+        profile.table.count_windows[col],
+        templates,
+        debug,
+    ))
 }
 
 impl TableReading {

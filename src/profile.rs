@@ -49,6 +49,21 @@ pub struct CubeProfile {
     pub slots: Vec<Rect>,
 }
 
+/// Coordonnées de clic, relatives au panneau.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ClickProfile {
+    /// Décalage du centre de la cellule source par rapport au bord droit et au
+    /// haut du nombre.
+    pub source_dx: i32,
+    pub source_dy: i32,
+    /// Centre du bouton « Transmuter ».
+    pub transmute_x: i32,
+    pub transmute_y: i32,
+    /// Point neutre où stationner le curseur pour éviter les infobulles.
+    pub park_x: i32,
+    pub park_y: i32,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
     pub image_width: u32,
@@ -56,6 +71,7 @@ pub struct Profile {
     pub panel: Rect,
     pub table: TableProfile,
     pub cube: CubeProfile,
+    pub click: ClickProfile,
 }
 
 impl Profile {
