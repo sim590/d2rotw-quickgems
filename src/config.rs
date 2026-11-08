@@ -9,6 +9,7 @@ use crate::planner::Keep;
 /// Limites pour un type de gemme. Les champs absents prennent la valeur du
 /// défaut global.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TierKeepConfig {
     pub abime: Option<u16>,
     pub imparfait: Option<u16>,
@@ -18,23 +19,24 @@ pub struct TierKeepConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeepTablesConfig {
     #[serde(default)]
     pub default: TierKeepConfig,
     #[serde(default)]
-    pub diamond: Option<TierKeepConfig>,
+    pub diamant: Option<TierKeepConfig>,
     #[serde(default)]
-    pub emerald: Option<TierKeepConfig>,
+    pub emeraude: Option<TierKeepConfig>,
     #[serde(default)]
-    pub ruby: Option<TierKeepConfig>,
+    pub rubis: Option<TierKeepConfig>,
     #[serde(default)]
-    pub topaz: Option<TierKeepConfig>,
+    pub topaze: Option<TierKeepConfig>,
     #[serde(default)]
-    pub amethyst: Option<TierKeepConfig>,
+    pub amethyste: Option<TierKeepConfig>,
     #[serde(default)]
-    pub sapphire: Option<TierKeepConfig>,
+    pub saphir: Option<TierKeepConfig>,
     #[serde(default)]
-    pub skull: Option<TierKeepConfig>,
+    pub crane: Option<TierKeepConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -56,13 +58,13 @@ impl Config {
     /// utilisée par le planificateur.
     pub fn keep_matrix(&self) -> Result<Keep> {
         let overrides = [
-            self.keep.diamond.as_ref(),
-            self.keep.emerald.as_ref(),
-            self.keep.ruby.as_ref(),
-            self.keep.topaz.as_ref(),
-            self.keep.amethyst.as_ref(),
-            self.keep.sapphire.as_ref(),
-            self.keep.skull.as_ref(),
+            self.keep.diamant.as_ref(),
+            self.keep.emeraude.as_ref(),
+            self.keep.rubis.as_ref(),
+            self.keep.topaze.as_ref(),
+            self.keep.amethyste.as_ref(),
+            self.keep.saphir.as_ref(),
+            self.keep.crane.as_ref(),
         ];
 
         let mut keep = [[0u32; 5]; 7];
@@ -121,7 +123,7 @@ mod tests {
             sans_defaut = 2
             parfait = 0
 
-            [keep.diamond]
+            [keep.diamant]
             abime = 20
             imparfait = 12
         "#;
@@ -131,6 +133,15 @@ mod tests {
         assert_eq!(keep[0], [20, 12, 4, 2, 0]); // diamant
         assert_eq!(keep[1], [10, 6, 4, 2, 0]); // émeraude, valeurs par défaut
         assert_eq!(keep[6], [10, 6, 4, 2, 0]); // crâne, valeurs par défaut
+    }
+
+    #[test]
+    fn rejects_old_english_type_keys() {
+        let text = "[keep.diamond]\nabime = 10\n";
+        assert!(toml::from_str::<Config>(text).is_err());
+
+        let text = "[keep.diamant]\nchipped = 10\n";
+        assert!(toml::from_str::<Config>(text).is_err());
     }
 
     #[test]

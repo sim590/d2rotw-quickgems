@@ -12,10 +12,10 @@ parfait = 0
 
 # Surcharges optionnelles par type. Les champs omis prennent la valeur du
 # défaut ci-dessus.
-[keep.diamond]
+[keep.diamant]
 abime = 20
 imparfait = 10
 
-[keep.skull]
+[keep.crane]
 abime = 20
 imparfait = 10
