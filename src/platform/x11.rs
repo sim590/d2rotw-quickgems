@@ -329,7 +329,10 @@ impl X11 {
             .xtest_fake_input(XTEST_BUTTON_RELEASE, button.code(), 0, self.root, 0, 0, 0)
             .context("XTest button release a échoué")?;
         self.connection.flush().context("flush X11 impossible")?;
-        sleep(Duration::from_millis(10));
+        // Laisser au jeu le temps de traiter le clic complet avant de
+        // relâcher Ctrl+Shift. Sinon, un clic de réinscription peut être vu
+        // comme un simple clic et déplacer la gemme dans l'inventaire.
+        sleep(Duration::from_millis(100));
         Ok(())
     }
 
