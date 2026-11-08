@@ -3,6 +3,7 @@
 //! D2R sous Proton est un client XWayland. On capture le drawable de la
 //! fenêtre et on injecte les clics avec l'extension XTest.
 
+use std::cell::Cell;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -10,10 +11,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use image::{ImageBuffer, Rgb, RgbImage};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, ImageFormat,
-    InputFocus, StackMode, Window,
+    AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, GrabMode,
+    ImageFormat, InputFocus, ModMask, StackMode, Window,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
+use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 
 const XTEST_MOTION_NOTIFY: u8 = 6;
@@ -24,6 +26,7 @@ const XTEST_KEY_RELEASE: u8 = 3;
 
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
+const KEYSYM_F9: u32 = 0xffc6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modifiers {
@@ -65,6 +68,8 @@ pub struct X11 {
     net_active_window: u32,
     ctrl_keycode: u8,
     shift_keycode: u8,
+    emergency_keycode: u8,
+    last_pointer: Cell<Option<(i32, i32)>>,
 }
 
 impl X11 {
@@ -86,10 +91,80 @@ impl X11 {
             net_active_window,
             ctrl_keycode: 0,
             shift_keycode: 0,
+            emergency_keycode: 0,
+            last_pointer: Cell::new(None),
         };
         x11.ctrl_keycode = x11.find_keycode(KEYSYM_CONTROL_L)?;
         x11.shift_keycode = x11.find_keycode(KEYSYM_SHIFT_L)?;
+        x11.emergency_keycode = x11.find_keycode(KEYSYM_F9).unwrap_or(0);
+        if x11.emergency_keycode != 0 {
+            let grab_ok = x11
+                .connection
+                .grab_key(
+                    false,
+                    x11.root,
+                    ModMask::ANY,
+                    x11.emergency_keycode,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .is_ok();
+            if !grab_ok {
+                eprintln!(
+                    "Impossible de capturer F9 pour l'arrêt d'urgence; \
+                     le failsafe de souris reste actif."
+                );
+                x11.emergency_keycode = 0;
+            }
+            let _ = x11.connection.flush();
+        }
         Ok(x11)
+    }
+
+    /// Position absolue du curseur (coordonnées racine).
+    pub fn pointer_position(&self) -> Result<(i32, i32)> {
+        let reply = self
+            .connection
+            .query_pointer(self.root)
+            .context("XQueryPointer a échoué")?
+            .reply()
+            .context("XQueryPointer sans réponse")?;
+        Ok((i32::from(reply.root_x), i32::from(reply.root_y)))
+    }
+
+    /// Mémorise la position actuelle comme référence du failsafe.
+    pub fn note_pointer(&self) -> Result<()> {
+        self.last_pointer.set(Some(self.pointer_position()?));
+        Ok(())
+    }
+
+    /// Vrai si le curseur a bougé depuis la dernière position laissée par le
+    /// programme. Une petite tolérance absorbe les arrondis X11.
+    pub fn pointer_moved_by_user(&self) -> Result<bool> {
+        let Some((last_x, last_y)) = self.last_pointer.get() else {
+            return Ok(false);
+        };
+        let (current_x, current_y) = self.pointer_position()?;
+        Ok((current_x - last_x).abs() > 5 || (current_y - last_y).abs() > 5)
+    }
+
+    /// Vrai si F9 a été pressé depuis le dernier appel.
+    pub fn emergency_requested(&self) -> Result<bool> {
+        if self.emergency_keycode == 0 {
+            return Ok(false);
+        }
+        while let Some(event) = self
+            .connection
+            .poll_for_event()
+            .context("poll_for_event X11 a échoué")?
+        {
+            if let Event::KeyPress(key) = event {
+                if key.detail == self.emergency_keycode {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     pub fn find_game_window(&self) -> Result<GameWindow> {
@@ -192,6 +267,7 @@ impl X11 {
         let release_result = self.release_modifiers(modifiers);
         click_result?;
         release_result?;
+        self.note_pointer()?;
         Ok(())
     }
 

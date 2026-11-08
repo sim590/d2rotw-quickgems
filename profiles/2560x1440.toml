@@ -26,6 +26,12 @@ roi_right = 4
 roi_top = -1
 roi_bottom = 18
 
+# Onglets du cache, relatifs au panneau. Le contrôle d'onglet actif compare
+# la luminosité de « Gemmes » à celle de « Partagé ».
+[tabs]
+gemmes = { x = 345, y = 112, width = 127, height = 40 }
+partage = { x = 217, y = 112, width = 125, height = 40 }
+
 # Coordonnées de clic, relatives au panneau.
 [click]
 # Centre d'une cellule source : bord droit du nombre - 30 px, haut - 16 px.

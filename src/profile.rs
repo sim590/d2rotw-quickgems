@@ -64,6 +64,12 @@ pub struct ClickProfile {
     pub park_y: i32,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct TabsProfile {
+    pub gemmes: Rect,
+    pub partage: Rect,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
     pub image_width: u32,
@@ -72,6 +78,7 @@ pub struct Profile {
     pub table: TableProfile,
     pub cube: CubeProfile,
     pub click: ClickProfile,
+    pub tabs: TabsProfile,
 }
 
 impl Profile {
@@ -123,6 +130,13 @@ impl Profile {
                 "le profil doit contenir 12 cases de cube, pas {}",
                 self.cube.slots.len()
             );
+        }
+        if self.tabs.gemmes.width == 0
+            || self.tabs.gemmes.height == 0
+            || self.tabs.partage.width == 0
+            || self.tabs.partage.height == 0
+        {
+            bail!("les rectangles des onglets doivent avoir une taille > 0");
         }
         Ok(())
     }

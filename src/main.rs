@@ -1,5 +1,6 @@
 mod config;
 mod executor;
+mod logging;
 mod planner;
 mod platform;
 mod profile;
@@ -218,6 +219,9 @@ fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool)
     print_table(&table.cells);
     print_uncertain(&table);
 
+    if !table.tab_active {
+        bail!("onglet Gemmes non actif: sélectionne l'onglet Gemmes");
+    }
     if !table.detected {
         bail!("table non détectée: ouvre le cache et l'onglet Gemmes");
     }
@@ -338,6 +342,10 @@ fn print_keep(keep: &planner::Keep) {
 }
 
 fn print_uncertain(table: &table::TableReading) {
+    if !table.tab_active {
+        println!("Onglet Gemmes non actif: sélectionne l'onglet Gemmes.");
+        return;
+    }
     if !table.detected {
         println!("Table non détectée: ouvre le cache et l'onglet Gemmes.");
         return;

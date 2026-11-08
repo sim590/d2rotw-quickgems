@@ -23,6 +23,8 @@ pub struct TableReading {
     pub scores: [[f32; 5]; 7],
     pub uncertain: Vec<(usize, usize)>,
     pub details: Vec<String>,
+    /// Faux quand l'onglet « Gemmes » n'est pas actif.
+    pub tab_active: bool,
     /// Faux quand aucune cellule positive n'a été trouvée : le cache n'est
     /// probablement pas ouvert, ou le profil ne correspond pas.
     pub detected: bool,
@@ -34,6 +36,24 @@ pub fn read_table(
     templates: &TemplateSet,
     debug: bool,
 ) -> Result<TableReading> {
+    let tab_active = super::tabs::gemmes_active(image, profile)?;
+    if !tab_active {
+        let mut uncertain = Vec::new();
+        for col in 0..7 {
+            for row in 0..5 {
+                uncertain.push((col, row));
+            }
+        }
+        return Ok(TableReading {
+            cells: [[None; 5]; 7],
+            scores: [[0.0f32; 5]; 7],
+            uncertain,
+            details: vec!["Onglet Gemmes non actif.".to_string()],
+            tab_active: false,
+            detected: false,
+        });
+    }
+
     let mut cells = [[None; 5]; 7];
     let mut scores = [[0.0f32; 5]; 7];
     let mut uncertain = Vec::new();
@@ -104,6 +124,7 @@ pub fn read_table(
         scores,
         uncertain,
         details,
+        tab_active: true,
         detected,
     })
 }
