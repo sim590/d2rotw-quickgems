@@ -1,11 +1,15 @@
+mod config;
+mod planner;
 mod profile;
 mod vision;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use image::RgbImage;
 
+use config::Config;
 use profile::Profile;
 use vision::digits::TemplateSet;
 use vision::table::{self, GEM_TYPES, TIERS};
@@ -35,6 +39,21 @@ enum Command {
         #[arg(long)]
         debug: bool,
     },
+    /// Lit la capture et calcule le plan de transmutations.
+    Plan {
+        /// Capture d'écran du jeu (PNG), par exemple 5120x1440 avec le jeu à gauche.
+        #[arg(long)]
+        image: PathBuf,
+        /// Profil de disposition (TOML).
+        #[arg(long, default_value = "profiles/2560x1440.toml")]
+        profile: PathBuf,
+        /// Prescription des quantités minimales à conserver.
+        #[arg(long, default_value = "quickgems.toml")]
+        config: PathBuf,
+        /// Affiche les détails de lecture par cellule.
+        #[arg(long)]
+        debug: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -45,11 +64,97 @@ fn main() -> Result<()> {
             profile,
             debug,
         } => inspect(&image, &profile, debug),
+        Command::Plan {
+            image,
+            profile,
+            config,
+            debug,
+        } => plan(&image, &profile, &config, debug),
     }
 }
 
 fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
     let profile = Profile::load(profile_path)?;
+    let game = load_game_image(image_path, &profile)?;
+    let templates = TemplateSet::load()?;
+    let table = table::read_table(&game, &profile, &templates, debug)?;
+
+    println!(
+        "Table des gemmes ({}x{})",
+        profile.image_width, profile.image_height
+    );
+    print_table(&table.cells);
+    println!("\nTotal connu: {}", table.known_total());
+    print_uncertain(&table);
+
+    let cube = vision::cube::read_cube(&game, &profile)?;
+    print_cube(&cube);
+
+    if debug {
+        print_table_details(&table);
+        println!("\nDétails du cube:");
+        for index in 0..12 {
+            println!(
+                "  case {index:2}: max={:.1} écart-type={:.1}",
+                cube.max_luma[index], cube.std_dev[index]
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool) -> Result<()> {
+    let profile = Profile::load(profile_path)?;
+    let game = load_game_image(image_path, &profile)?;
+    let templates = TemplateSet::load()?;
+    let table = table::read_table(&game, &profile, &templates, debug)?;
+
+    println!(
+        "Table actuelle ({}x{})",
+        profile.image_width, profile.image_height
+    );
+    print_table(&table.cells);
+    print_uncertain(&table);
+
+    if !table.uncertain.is_empty() {
+        bail!("impossible de planifier: la lecture du tableau n'est pas fiable");
+    }
+
+    let config = Config::load(config_path)?;
+    let keep = config.keep_matrix()?;
+    let counts = counts_from_table(&table)?;
+    let plan = planner::project(counts, &keep);
+
+    println!("\nLimites keep (minimum à conserver):");
+    print_keep(&keep);
+
+    println!("\nPlan: {} transmutations", plan.conversion_count());
+    for gem_type in 0..7 {
+        let mut parts = Vec::new();
+        for tier in 0..4 {
+            let count = plan.conversions[gem_type][tier];
+            if count > 0 {
+                parts.push(format!("{} -> {} x{}", TIERS[tier], TIERS[tier + 1], count));
+            }
+        }
+        if !parts.is_empty() {
+            println!("  {}: {}", GEM_TYPES[gem_type], parts.join(", "));
+        }
+    }
+
+    println!("\nParfaites gagnées: {}", plan.total_perfect_gain());
+    println!("\nTable projetée:");
+    print_counts(&plan.final_counts);
+
+    if debug {
+        print_table_details(&table);
+    }
+
+    Ok(())
+}
+
+fn load_game_image(image_path: &Path, profile: &Profile) -> Result<RgbImage> {
     let original = image::open(image_path)
         .with_context(|| format!("impossible d'ouvrir l'image {}", image_path.display()))?
         .to_rgb8();
@@ -64,33 +169,71 @@ fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
         );
     }
 
-    let game =
+    Ok(
         image::imageops::crop_imm(&original, 0, 0, profile.image_width, profile.image_height)
-            .to_image();
+            .to_image(),
+    )
+}
 
-    let templates = TemplateSet::load()?;
-    let table = table::read_table(&game, &profile, &templates, debug)?;
+fn counts_from_table(table: &table::TableReading) -> Result<planner::Counts> {
+    let mut counts = [[0u32; 5]; 7];
+    for col in 0..7 {
+        for row in 0..5 {
+            let value = table.cells[col][row].ok_or_else(|| {
+                anyhow!("cellule incertaine: {} / {}", GEM_TYPES[col], TIERS[row])
+            })?;
+            counts[col][row] = u32::from(value);
+        }
+    }
+    Ok(counts)
+}
 
-    println!(
-        "Table des gemmes ({}x{})",
-        profile.image_width, profile.image_height
-    );
+fn print_header() {
     println!(
         "{:<10} {:>6} {:>10} {:>7} {:>12} {:>9}",
         "Type", "Abîmé", "Imparfait", "Normal", "Sans défaut", "Parfait"
     );
+}
 
+fn print_table(cells: &[[Option<u16>; 5]; 7]) {
+    print_header();
     for col in 0..7 {
-        let cells = (0..5)
-            .map(|row| cell_text(table.cells[col][row], column_width(row)))
+        let values = (0..5)
+            .map(|row| cell_text(cells[col][row], column_width(row)))
             .collect::<Vec<_>>();
         println!(
             "{:<10} {} {} {} {} {}",
-            GEM_TYPES[col], cells[0], cells[1], cells[2], cells[3], cells[4]
+            GEM_TYPES[col], values[0], values[1], values[2], values[3], values[4]
         );
     }
+}
 
-    println!("\nTotal connu: {}", table.known_total());
+fn print_counts(counts: &planner::Counts) {
+    print_header();
+    for col in 0..7 {
+        println!(
+            "{:<10} {:>6} {:>10} {:>7} {:>12} {:>9}",
+            GEM_TYPES[col],
+            counts[col][0],
+            counts[col][1],
+            counts[col][2],
+            counts[col][3],
+            counts[col][4]
+        );
+    }
+}
+
+fn print_keep(keep: &planner::Keep) {
+    print_header();
+    for col in 0..7 {
+        println!(
+            "{:<10} {:>6} {:>10} {:>7} {:>12} {:>9}",
+            GEM_TYPES[col], keep[col][0], keep[col][1], keep[col][2], keep[col][3], keep[col][4]
+        );
+    }
+}
+
+fn print_uncertain(table: &table::TableReading) {
     if table.uncertain.is_empty() {
         println!("Toutes les cellules ont été lues avec confiance.");
     } else {
@@ -102,8 +245,16 @@ fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
             );
         }
     }
+}
 
-    let cube = vision::cube::read_cube(&game, &profile)?;
+fn print_table_details(table: &table::TableReading) {
+    println!("\nDétails de lecture:");
+    for detail in &table.details {
+        println!("{detail}");
+    }
+}
+
+fn print_cube(cube: &vision::cube::CubeReading) {
     println!("\nCube horadrique (E=vide, X=occupé):");
     for row in 0..4 {
         let mut line = String::new();
@@ -113,22 +264,6 @@ fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
         }
         println!("{}", line.trim_end());
     }
-
-    if debug {
-        println!("\nDétails de lecture:");
-        for detail in &table.details {
-            println!("{detail}");
-        }
-        println!("\nDétails du cube:");
-        for index in 0..12 {
-            println!(
-                "  case {index:2}: max={:.1} écart-type={:.1}",
-                cube.max_luma[index], cube.std_dev[index]
-            );
-        }
-    }
-
-    Ok(())
 }
 
 fn column_width(row: usize) -> usize {

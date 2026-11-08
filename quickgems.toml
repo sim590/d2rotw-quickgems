@@ -1,0 +1,21 @@
+# Prescription des quantités minimales à conserver pour chaque type de gemme
+# et chaque palier. Le planificateur ne descend jamais sous ces seuils.
+#
+# Ordre des paliers : abîmé, imparfait, normal, sans défaut, parfait.
+
+[keep.default]
+abime = 10
+imparfait = 6
+normal = 4
+sans_defaut = 2
+parfait = 0
+
+# Surcharges optionnelles par type. Les champs omis prennent la valeur du
+# défaut ci-dessus.
+[keep.diamond]
+abime = 20
+imparfait = 10
+
+[keep.skull]
+abime = 20
+imparfait = 10
