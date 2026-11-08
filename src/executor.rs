@@ -260,6 +260,7 @@ fn run_live_inner(
         check_focus(x11, window)?;
 
         let Some(action) = planner::next_action(&counts, &keep, options.start_tier) else {
+            report_full_receivers(logger, &counts, &keep, options.start_tier);
             logger.log("Plus aucune transmutation valide.");
             break;
         };
@@ -520,6 +521,13 @@ fn retrieve_with_retry(
             }
             let image = x11.capture_window(window)?;
             let reading = table::read_cell(&image, profile, templates, col, row, false)?;
+            if reading.best_candidate == Some(planner::MAX_STACK as u16) {
+                logger.log(full_case_message(col, row));
+                bail!(
+                    "la case cible est pleine ({}); la gemme produite n'a pas pu y être réinsérée",
+                    planner::MAX_STACK
+                );
+            }
             bail!(
                 "le cube est vide mais la quantité cible n'a pas augmenté \
                  (lu: {:?}, score {:.3}, attendu {expected}); \
@@ -560,7 +568,51 @@ fn retrieve_with_retry(
         ));
     }
 
+    if target_full(x11, window, profile, templates, col, row)? {
+        logger.log(full_case_message(col, row));
+        bail!(
+            "la case cible est pleine ({}); la gemme reste dans le cube",
+            planner::MAX_STACK
+        );
+    }
+
     bail!("impossible de réinsérer la gemme dans la table après 3 tentatives")
+}
+
+/// Vrai si la case cible a atteint la capacité maximale d'une pile.
+fn target_full(
+    x11: &X11,
+    window: &GameWindow,
+    profile: &Profile,
+    templates: &TemplateSet,
+    col: usize,
+    row: usize,
+) -> Result<bool> {
+    let image = x11.capture_window(window)?;
+    let reading = table::read_cell(&image, profile, templates, col, row, false)?;
+    Ok(reading.best_candidate == Some(planner::MAX_STACK as u16))
+}
+
+fn full_case_message(col: usize, row: usize) -> String {
+    format!(
+        "Case pleine: {} / {} = {}. Une gemme transmutée ne peut pas y être \
+         réinsérée; vide cette case ou utilise les gemmes avant de relancer.",
+        GEM_TYPES[col],
+        TIERS[row],
+        planner::MAX_STACK
+    )
+}
+
+/// Signale sur la sortie standard les cases pleines qui bloquent le plan.
+fn report_full_receivers(
+    logger: &mut Logger,
+    counts: &planner::Counts,
+    keep: &planner::Keep,
+    start_tier: usize,
+) {
+    for (gem_type, target_tier) in planner::full_receivers(counts, keep, start_tier) {
+        logger.log(full_case_message(gem_type, target_tier));
+    }
 }
 
 /// Attend que la cellule atteigne la valeur attendue. Retourne `None` si le

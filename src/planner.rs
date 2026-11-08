@@ -10,6 +10,9 @@ pub type Counts = [[u32; 5]; 7];
 /// Quantités minimales à conserver, même forme que `Counts`.
 pub type Keep = [[u32; 5]; 7];
 
+/// Capacité maximale d'une pile de gemmes dans une case du cache.
+pub const MAX_STACK: u32 = 99;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Action {
     pub gem_type: usize,
@@ -32,12 +35,30 @@ pub struct Plan {
 pub fn next_action(counts: &Counts, keep: &Keep, start_tier: usize) -> Option<Action> {
     for tier in start_tier..4 {
         for gem_type in 0..7 {
-            if counts[gem_type][tier] >= keep[gem_type][tier].saturating_add(3) {
+            if counts[gem_type][tier] >= keep[gem_type][tier].saturating_add(3)
+                && counts[gem_type][tier + 1] < MAX_STACK
+            {
                 return Some(Action { gem_type, tier });
             }
         }
     }
     None
+}
+
+/// Cases cibles pleines (99) qui empêchent une conversion pourtant possible.
+/// Retourne des couples (type de gemme, palier cible).
+pub fn full_receivers(counts: &Counts, keep: &Keep, start_tier: usize) -> Vec<(usize, usize)> {
+    let mut full = Vec::new();
+    for tier in start_tier..4 {
+        for gem_type in 0..7 {
+            if counts[gem_type][tier] >= keep[gem_type][tier].saturating_add(3)
+                && counts[gem_type][tier + 1] >= MAX_STACK
+            {
+                full.push((gem_type, tier + 1));
+            }
+        }
+    }
+    full
 }
 
 /// Projette toutes les conversions possibles à partir d'un état initial.
@@ -170,6 +191,44 @@ mod tests {
         assert_eq!(plan.final_counts[0][1], 3);
         assert_eq!(plan.final_counts[0][2], 1);
         assert_eq!(plan.conversion_count(), 1);
+    }
+
+    #[test]
+    fn refuses_to_fill_a_full_stack() {
+        let mut counts = empty_counts();
+        let mut keep = empty_keep();
+        counts[0][0] = 3;
+        counts[0][1] = MAX_STACK;
+        // La pile pleine ne peut pas être convertie vers le haut.
+        keep[0][1] = MAX_STACK;
+
+        assert_eq!(next_action(&counts, &keep, 0), None);
+    }
+
+    #[test]
+    fn cascade_stops_at_full_stack() {
+        let mut counts = empty_counts();
+        let mut keep = empty_keep();
+        counts[0][0] = 9;
+        counts[0][1] = MAX_STACK - 1;
+        // Empêche de vider la pile pleine vers le palier supérieur.
+        keep[0][1] = MAX_STACK;
+
+        let plan = project(counts, &keep, 0);
+        assert_eq!(plan.final_counts[0][1], MAX_STACK);
+        assert_eq!(plan.final_counts[0][0], 6);
+        assert_eq!(plan.conversion_count(), 1);
+    }
+
+    #[test]
+    fn reports_full_receivers() {
+        let mut counts = empty_counts();
+        let keep = empty_keep();
+        counts[0][0] = 3;
+        counts[0][1] = MAX_STACK;
+        counts[1][0] = 2;
+
+        assert_eq!(full_receivers(&counts, &keep, 0), vec![(0, 1)]);
     }
 
     #[test]

@@ -361,6 +361,18 @@ fn plan(
     println!("\nTable projetée:");
     print_counts(&plan.final_counts);
 
+    let full = planner::full_receivers(&counts, &keep, start_tier);
+    if !full.is_empty() {
+        println!("\nCases pleines ({}):", planner::MAX_STACK);
+        for (gem_type, target_tier) in full {
+            println!(
+                "  {} / {}: la gemme produite ne peut pas y être réinsérée; \
+                 vide cette case ou utilise les gemmes avant de relancer.",
+                GEM_TYPES[gem_type], TIERS[target_tier]
+            );
+        }
+    }
+
     if debug {
         print_table_details(&table);
     }
