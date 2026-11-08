@@ -896,6 +896,7 @@ mod tests {
             top_candidates: vec![(best, score)],
             window: 22,
             note: None,
+            corroborated: false,
         }
     }
 
