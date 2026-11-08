@@ -518,9 +518,14 @@ fn retrieve_with_retry(
             {
                 return Ok(());
             }
+            let image = x11.capture_window(window)?;
+            let reading = table::read_cell(&image, profile, templates, col, row, false)?;
             bail!(
-                "le cube est vide mais la quantité cible n'a pas augmenté; \
-                 vérifie l'inventaire, une gemme a peut-être été déplacée"
+                "le cube est vide mais la quantité cible n'a pas augmenté \
+                 (lu: {:?}, score {:.3}, attendu {expected}); \
+                 vérifie l'inventaire, une gemme a peut-être été déplacée",
+                reading.best_candidate,
+                reading.score
             );
         };
 
