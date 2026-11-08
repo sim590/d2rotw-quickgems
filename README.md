@@ -130,6 +130,6 @@ config parsing, and action verification rules.
 The code is licensed under the GNU General Public License, version 3
 (GPL-3.0). See [LICENSE](LICENSE).
 
-The bundled game assets, specifically the Exocet font and the footage in the
-demo GIF, belong to Blizzard Entertainment and are not covered by this
-license.
+`assets/exocet-blizzard-medium.ttf` is not covered by this license. Its
+embedded metadata identifies it as Exocet, copyright Emigre Inc., designed by
+Jonathan Barnbrook, all rights reserved.
