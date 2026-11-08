@@ -430,7 +430,7 @@ fn acquire_source(
                     check_emergency(x11)?;
                     check_tab_live(x11, window, profile)?;
                     x11.click(source_x, source_y, MouseButton::Left, Modifiers::CtrlShift)?;
-                    sleep(Duration::from_millis(150));
+                    sleep(Duration::from_millis(100));
                 }
                 let cube = read_cube_live(x11, window, profile)?;
                 let completed = cube.occupied.iter().filter(|occupied| **occupied).count();
@@ -460,7 +460,7 @@ fn transmute_with_retry(
         check_emergency(x11)?;
         check_tab_live(x11, window, profile)?;
         x11.click(transmute_x, transmute_y, MouseButton::Left, Modifiers::None)?;
-        sleep(Duration::from_millis(500));
+        sleep(Duration::from_millis(350));
 
         let cube = read_cube_live(x11, window, profile)?;
         let occupied: Vec<usize> = cube
@@ -579,8 +579,11 @@ fn wait_cell(
         .map_err(|_| anyhow!("valeur attendue trop grande pour une cellule: {expected}"))?;
     let deadline = Instant::now() + timeout;
 
+    // Le curseur reste au point de repos pendant toute l'attente: on le place
+    // une seule fois, puis on relit la cellule jusqu'à la valeur attendue.
+    park(x11, window, profile)?;
     loop {
-        park(x11, window, profile)?;
+        check_emergency(x11)?;
         let image = x11.capture_window(window)?;
         let reading = table::read_cell(&image, profile, templates, col, row, false)?;
         if expected_accepted(&reading, expected_u16) {
@@ -590,7 +593,7 @@ fn wait_cell(
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(60));
     }
 }
 
@@ -618,7 +621,7 @@ fn park(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
 
     let (park_x, park_y) = park_point(window, profile);
     x11.move_pointer(park_x, park_y)?;
-    sleep(Duration::from_millis(120));
+    sleep(Duration::from_millis(60));
     check_emergency(x11)?;
     x11.note_pointer()?;
     Ok(())
@@ -793,7 +796,7 @@ fn reload_state(
 fn park_for_resume(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
     let (park_x, park_y) = park_point(window, profile);
     x11.move_pointer(park_x, park_y)?;
-    sleep(Duration::from_millis(120));
+    sleep(Duration::from_millis(60));
     check_emergency(x11)?;
     x11.note_pointer()?;
     Ok(())
@@ -833,7 +836,7 @@ fn recover_cube(
             check_emergency(x11)?;
             let (x, y) = cube_slot_point(window, profile, index);
             x11.click(x, y, MouseButton::Left, Modifiers::CtrlShift)?;
-            sleep(Duration::from_millis(200));
+            sleep(Duration::from_millis(120));
         }
     }
 
