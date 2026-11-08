@@ -161,13 +161,7 @@ pub fn read_cell(
         imageops::crop_imm(image, roi_x as u32, roi_y as u32, roi_width, roi_height).to_image();
     let baseline = (top + 13 - roi_y).max(0) as usize;
 
-    Ok(digits::read_count(
-        &roi,
-        baseline,
-        profile.table.count_windows[col][row],
-        templates,
-        debug,
-    ))
+    Ok(digits::read_count(&roi, baseline, templates, debug))
 }
 
 impl TableReading {

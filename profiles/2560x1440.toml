@@ -17,19 +17,8 @@ height = 900
 count_right_edges = [196, 277, 358, 440, 521, 603, 684]
 # Haut du texte du nombre pour chaque rangée (5 paliers).
 count_tops = [218, 284, 350, 417, 484]
-# Fenêtre étroite de droite par type et par palier : elle protège des icônes
-# blanches. Le lecteur essaie aussi une fenêtre large de 30 px pour chaque
-# cellule et l'utilise si la fenêtre étroite ne garde qu'un « 0 » coupé d'un
-# « 20 ». Ainsi toutes les cellules peuvent lire les nombres à deux chiffres.
-count_windows = [
-  [22, 22, 22, 22, 22], # Diamant
-  [22, 22, 22, 22, 22], # Émeraude
-  [22, 22, 22, 22, 22], # Rubis
-  [22, 22, 22, 22, 22], # Topaze
-  [22, 22, 22, 22, 22], # Améthyste
-  [28, 28, 28, 28, 28], # Saphir
-  [20, 20, 20, 20, 20], # Crâne
-]
+# Les fenêtres de lecture (20, 22, 24 et 30 px) sont communes aux 35 cellules
+# et définies dans le code (src/vision/digits.rs).
 # Zone de lecture relative au bord droit et au haut du nombre.
 roi_left = -34
 roi_right = 4

@@ -34,11 +34,6 @@ impl Rect {
 pub struct TableProfile {
     pub count_right_edges: Vec<i32>,
     pub count_tops: Vec<i32>,
-    /// Largeur de la fenêtre de lecture à droite, par type et par palier.
-    /// Le diamant a besoin d'une fenêtre plus large aux paliers Normal et
-    /// Sans défaut pour lire « 20 » sans couper le 2; les autres paliers
-    /// utilisent une fenêtre plus étroite pour éviter l'icône.
-    pub count_windows: [[usize; 5]; 7],
     pub roi_left: i32,
     pub roi_right: i32,
     pub roi_top: i32,
@@ -110,15 +105,6 @@ impl Profile {
                 "le profil doit contenir 5 hauts de rangées, pas {}",
                 self.table.count_tops.len()
             );
-        }
-        if self
-            .table
-            .count_windows
-            .iter()
-            .flatten()
-            .any(|width| *width < 8)
-        {
-            bail!("les largeurs de fenêtre doivent être >= 8");
         }
         if self.table.roi_right <= self.table.roi_left {
             bail!("la zone de lecture du nombre est vide");

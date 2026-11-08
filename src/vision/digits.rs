@@ -120,27 +120,19 @@ impl CountReading {
 /// Lit le nombre dans une petite zone (ROI) qui contient le texte blanc et,
 /// possiblement, le bas d'une icône de gemme.
 ///
-/// Essaie quelques largeurs de fenêtre autour de celle du profil. Une fenêtre
-/// plus étroite enlève mieux le bas d'une icône (crâne, diamant), mais peut
-/// couper le premier chiffre d'un nombre large; on garde donc la meilleure
-/// lecture, avec un filtre sur la largeur du gabarit.
+/// Toutes les cellules utilisent les mêmes fenêtres. La plus étroite enlève
+/// mieux le bas d'une icône de gemme; les plus larges rattrapent un nombre dont
+/// le premier chiffre serait coupé. Corriger la lecture se fait donc une fois
+/// pour les 35 cellules, jamais type par type.
+const READ_WINDOWS: [usize; 4] = [20, 22, 24, WIDE_WINDOW];
+
 pub fn read_count(
     roi: &RgbImage,
     baseline: usize,
-    base_window: usize,
     templates: &TemplateSet,
     debug: bool,
 ) -> CountReading {
-    let mut windows = Vec::new();
-    for delta in [-2i32, 0, 2] {
-        let window = (base_window as i32 + delta).max(8) as usize;
-        if !windows.contains(&window) {
-            windows.push(window);
-        }
-    }
-    if !windows.contains(&WIDE_WINDOW) {
-        windows.push(WIDE_WINDOW);
-    }
+    let windows = READ_WINDOWS;
 
     // La fenêtre étroite évite le bas des icônes, mais elle coupe le premier
     // chiffre des nombres larges: sur le diamant, « 30 » ne garde que le « 0 »
@@ -175,10 +167,14 @@ pub fn read_count(
     }
 
     if let Some(base) = base_best {
-        if base.best_candidate == Some(0) {
+        // La fenêtre étroite peut couper le premier chiffre et ne garder que
+        // le dernier: « 30 » se lit alors « 0 ». Si la fenêtre large lit un
+        // nombre à deux chiffres qui finit par le même chiffre, c'est elle qui
+        // porte le nombre complet.
+        if let Some(digit) = base.best_candidate.filter(|digit| *digit < 10) {
             if let Some(wide) = &wide_best {
                 if let Some(candidate) = wide.best_candidate {
-                    if candidate >= 10 && candidate % 10 == 0 && wide.score >= 0.70 {
+                    if candidate >= 10 && candidate % 10 == digit && wide.score >= 0.70 {
                         let mut reading = wide.clone();
                         reading.number = Some(candidate);
                         reading.corroborated = true;
@@ -587,7 +583,7 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 22, &templates, false);
+        let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(20));
     }
 
@@ -602,7 +598,7 @@ mod tests {
             let roi = image::load_from_memory(bytes)
                 .expect("fixture PNG")
                 .to_rgb8();
-            let reading = read_count(&roi, 14, 22, &templates, false);
+            let reading = read_count(&roi, 14, &templates, false);
             assert_eq!(reading.best_candidate, Some(20));
         }
     }
@@ -614,7 +610,7 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 22, &templates, false);
+        let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(30));
         assert!(reading.is_confident());
     }
@@ -626,7 +622,7 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 22, &templates, false);
+        let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(31));
         assert!(reading.is_confident());
     }
@@ -638,7 +634,7 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 22, &templates, false);
+        let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(27));
         assert!(reading.is_confident());
     }
@@ -652,7 +648,7 @@ mod tests {
             .expect("fixture PNG")
             .to_rgb8();
         let templates = TemplateSet::load().expect("templates");
-        let reading = read_count(&roi, 14, 22, &templates, false);
+        let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(30));
         assert!(reading.is_confident());
     }
