@@ -354,7 +354,13 @@ fn is_confident_score(score: f32, margin: f32) -> bool {
     // Un score élevé avec une petite marge reste fiable; un score plus bas
     // exige une marge plus grande pour éviter de deviner. Le seuil de 0.01
     // couvre les nombres proches (ex. 36 vs 35) sur les icônes colorées.
-    (score >= 0.75 && margin >= 0.01) || (score >= 0.40 && margin >= 0.04)
+    // Entre 0.70 et 0.75, on exige une marge d'au moins 0.02: c'est le cas
+    // des nombres à deux chiffres sur les gemmes colorées (ex. 30 à 0.738
+    // avec 0.025 de marge), tandis qu'une lecture ambiguë a une marge plus
+    // faible (ex. 97 vs 27 à 0.008).
+    (score >= 0.75 && margin >= 0.01)
+        || (score >= 0.70 && margin >= 0.02)
+        || (score >= 0.40 && margin >= 0.04)
 }
 
 /// Construit le masque des chiffres en ignorant les pixels colorés de l'icône
@@ -659,6 +665,14 @@ mod tests {
         assert!(is_confident_score(0.782, 0.014));
         assert!(!is_confident_score(0.782, 0.005));
         assert!(!is_confident_score(0.70, 0.014));
+    }
+
+    #[test]
+    fn accepts_two_digit_reading_with_moderate_score() {
+        // Saphir/Parfait 30 observé en live: score 0.738, marge 0.025.
+        assert!(is_confident_score(0.738, 0.025));
+        // La même lecture avec une marge trop faible reste refusée.
+        assert!(!is_confident_score(0.738, 0.015));
     }
 
     #[test]
