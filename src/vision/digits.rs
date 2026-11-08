@@ -133,8 +133,15 @@ pub fn read_count(
     }
 
     let mut best: Option<CountReading> = None;
+    let mut zero: Option<CountReading> = None;
     for window in windows {
         let reading = read_count_window(roi, baseline, window, templates, debug);
+        if reading.actual_pixels == 0 {
+            if zero.is_none() {
+                zero = Some(reading);
+            }
+            continue;
+        }
         if best
             .as_ref()
             .map_or(true, |current| reading.score > current.score)
@@ -143,7 +150,24 @@ pub fn read_count(
         }
     }
 
-    best.unwrap_or_else(|| CountReading::empty("aucune fenêtre de lecture"))
+    if let Some(best) = best {
+        return best;
+    }
+
+    if let Some(mut zero) = zero {
+        // Une cellule sans chiffre est une cellule à zéro. Le garde-fou de
+        // `read_table` empêche de confondre une table entièrement vide avec un
+        // cache fermé.
+        zero.number = Some(0);
+        zero.best_candidate = Some(0);
+        zero.score = 1.0;
+        zero.margin = 1.0;
+        zero.top_candidates = vec![(0, 1.0)];
+        zero.note = Some("aucun chiffre: quantité zéro".to_string());
+        return zero;
+    }
+
+    CountReading::empty("aucune fenêtre de lecture")
 }
 
 fn read_count_window(
@@ -156,10 +180,16 @@ fn read_count_window(
     let (actual, bbox, kept_components, actual_pixels) = build_actual_mask(roi, baseline, window);
     let Some(bbox) = bbox else {
         return CountReading {
-            window,
+            number: Some(0),
+            best_candidate: Some(0),
+            score: 0.0,
+            margin: 0.0,
+            bbox: None,
             kept_components,
             actual_pixels,
-            ..CountReading::empty("aucun pixel de texte")
+            top_candidates: Vec::new(),
+            window,
+            note: Some("aucun chiffre".to_string()),
         };
     };
 

@@ -38,6 +38,9 @@ pub fn run_from_image(
 
     let image = crate::load_game_image(image_path, profile)?;
     let table = table::read_table(&image, profile, templates, options.debug)?;
+    if !table.detected {
+        bail!("table non détectée: ouvre le cache et l'onglet Gemmes");
+    }
     if !table.uncertain.is_empty() {
         bail!("impossible d'exécuter: la lecture du tableau n'est pas fiable");
     }
@@ -108,6 +111,9 @@ pub fn run_live(
     park(&x11, &window, profile)?;
     let image = x11.capture_window(&window)?;
     let table = table::read_table(&image, profile, templates, options.debug)?;
+    if !table.detected {
+        bail!("table non détectée: ouvre le cache et l'onglet Gemmes");
+    }
     if !table.uncertain.is_empty() {
         bail!(
             "impossible d'exécuter: {} cellule(s) incertaine(s); ouvre le cache, \

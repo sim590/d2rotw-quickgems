@@ -218,6 +218,9 @@ fn plan(image_path: &Path, profile_path: &Path, config_path: &Path, debug: bool)
     print_table(&table.cells);
     print_uncertain(&table);
 
+    if !table.detected {
+        bail!("table non détectée: ouvre le cache et l'onglet Gemmes");
+    }
     if !table.uncertain.is_empty() {
         bail!("impossible de planifier: la lecture du tableau n'est pas fiable");
     }
@@ -335,6 +338,10 @@ fn print_keep(keep: &planner::Keep) {
 }
 
 fn print_uncertain(table: &table::TableReading) {
+    if !table.detected {
+        println!("Table non détectée: ouvre le cache et l'onglet Gemmes.");
+        return;
+    }
     if table.uncertain.is_empty() {
         println!("Toutes les cellules ont été lues avec confiance.");
     } else {

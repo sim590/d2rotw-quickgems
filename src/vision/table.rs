@@ -23,6 +23,9 @@ pub struct TableReading {
     pub scores: [[f32; 5]; 7],
     pub uncertain: Vec<(usize, usize)>,
     pub details: Vec<String>,
+    /// Faux quand aucune cellule positive n'a été trouvée : le cache n'est
+    /// probablement pas ouvert, ou le profil ne correspond pas.
+    pub detected: bool,
 }
 
 pub fn read_table(
@@ -67,11 +70,41 @@ pub fn read_table(
         }
     }
 
+    // Une cellule sans chiffre vaut zéro. Mais si *toutes* les cellules sont à
+    // zéro, c'est presque certainement que le cache n'est pas ouvert ou que le
+    // profil ne correspond pas : on marque alors toute la table incertaine.
+    let positive_cells = cells
+        .iter()
+        .flat_map(|column| column.iter())
+        .filter(|value| matches!(value, Some(amount) if *amount > 0))
+        .count();
+    let detected = positive_cells > 0;
+
+    if !detected {
+        for col in 0..7 {
+            for row in 0..5 {
+                cells[col][row] = None;
+                scores[col][row] = 0.0;
+            }
+        }
+        uncertain.clear();
+        for col in 0..7 {
+            for row in 0..5 {
+                uncertain.push((col, row));
+            }
+        }
+        details.push(
+            "Table non détectée: aucune cellule positive (cache fermé ou profil incorrect)."
+                .to_string(),
+        );
+    }
+
     Ok(TableReading {
         cells,
         scores,
         uncertain,
         details,
+        detected,
     })
 }
 
