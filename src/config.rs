@@ -49,8 +49,12 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("impossible de lire la configuration {}", path.display()))?;
-        let config: Config = toml::from_str(&text)
-            .with_context(|| format!("configuration TOML invalide: {}", path.display()))?;
+        Self::from_toml(&text, &path.display().to_string())
+    }
+
+    pub fn from_toml(text: &str, origin: &str) -> Result<Self> {
+        let config: Config = toml::from_str(text)
+            .with_context(|| format!("configuration TOML invalide: {origin}"))?;
         Ok(config)
     }
 

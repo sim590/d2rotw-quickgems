@@ -81,8 +81,12 @@ impl Profile {
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("impossible de lire le profil {}", path.display()))?;
-        let profile: Profile = toml::from_str(&text)
-            .with_context(|| format!("profil TOML invalide: {}", path.display()))?;
+        Self::from_toml(&text, &path.display().to_string())
+    }
+
+    pub fn from_toml(text: &str, origin: &str) -> Result<Self> {
+        let profile: Profile =
+            toml::from_str(text).with_context(|| format!("profil TOML invalide: {origin}"))?;
         profile.validate()?;
         Ok(profile)
     }

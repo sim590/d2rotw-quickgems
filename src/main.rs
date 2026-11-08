@@ -38,9 +38,9 @@ enum Command {
         /// Capture d'écran du jeu (PNG), par exemple 5120x1440 avec le jeu à gauche.
         #[arg(long)]
         image: PathBuf,
-        /// Profil de disposition (TOML).
-        #[arg(long, default_value = "profiles/2560x1440.toml")]
-        profile: PathBuf,
+        /// Profil de disposition (TOML); profil intégré si absent.
+        #[arg(long)]
+        profile: Option<PathBuf>,
         /// Affiche les détails de lecture par cellule.
         #[arg(long)]
         debug: bool,
@@ -50,12 +50,13 @@ enum Command {
         /// Capture d'écran du jeu (PNG), par exemple 5120x1440 avec le jeu à gauche.
         #[arg(long)]
         image: PathBuf,
-        /// Profil de disposition (TOML).
-        #[arg(long, default_value = "profiles/2560x1440.toml")]
-        profile: PathBuf,
-        /// Prescription des quantités minimales à conserver.
-        #[arg(long, default_value = "quickgems.toml")]
-        config: PathBuf,
+        /// Profil de disposition (TOML); profil intégré si absent.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Prescription des quantités minimales à conserver; configuration
+        /// intégrée si absente.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Limite la projection à N transmutations (budget).
         #[arg(long)]
         max_transmutations: Option<usize>,
@@ -76,21 +77,22 @@ enum Command {
         /// Fichier PNG de sortie.
         #[arg(long)]
         output: PathBuf,
-        /// Profil de disposition (TOML).
-        #[arg(long, default_value = "profiles/2560x1440.toml")]
-        profile: PathBuf,
+        /// Profil de disposition (TOML); profil intégré si absent.
+        #[arg(long)]
+        profile: Option<PathBuf>,
     },
     /// Lit le jeu en direct et exécute les transmutations (simulation par défaut).
     Run {
         /// Utilise une capture PNG au lieu de la fenêtre X11 (simulation seulement).
         #[arg(long)]
         image: Option<PathBuf>,
-        /// Profil de disposition (TOML).
-        #[arg(long, default_value = "profiles/2560x1440.toml")]
-        profile: PathBuf,
-        /// Prescription des quantités minimales à conserver.
-        #[arg(long, default_value = "quickgems.toml")]
-        config: PathBuf,
+        /// Profil de disposition (TOML); profil intégré si absent.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Prescription des quantités minimales à conserver; configuration
+        /// intégrée si absente.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Fait réellement les clics. Sans ce drapeau, le programme simule.
         #[arg(long)]
         execute: bool,
@@ -124,7 +126,7 @@ fn main() -> Result<()> {
             image,
             profile,
             debug,
-        } => inspect(&image, &profile, debug),
+        } => inspect(&image, profile.as_deref(), debug),
         Command::Plan {
             image,
             profile,
@@ -134,13 +136,13 @@ fn main() -> Result<()> {
             debug,
         } => plan(
             &image,
-            &profile,
-            &config,
+            profile.as_deref(),
+            config.as_deref(),
             max_transmutations,
             start_tier,
             debug,
         ),
-        Command::Capture { output, profile } => capture_live(&output, &profile),
+        Command::Capture { output, profile } => capture_live(&output, profile.as_deref()),
         Command::Run {
             image,
             profile,
@@ -153,8 +155,8 @@ fn main() -> Result<()> {
             debug,
         } => run(
             image.as_deref(),
-            &profile,
-            &config,
+            profile.as_deref(),
+            config.as_deref(),
             execute,
             max_transmutations,
             until_done,
@@ -188,8 +190,39 @@ fn parse_start_tier(value: &str) -> std::result::Result<usize, String> {
     Ok(tier)
 }
 
-fn capture_live(output: &Path, profile_path: &Path) -> Result<()> {
-    let profile = Profile::load(profile_path)?;
+const DEFAULT_PROFILE_PATH: &str = "profiles/2560x1440.toml";
+const DEFAULT_CONFIG_PATH: &str = "quickgems.toml";
+const BUILTIN_PROFILE: &str = include_str!("../profiles/2560x1440.toml");
+const BUILTIN_CONFIG: &str = include_str!("../quickgems.toml");
+
+/// Charge le profil demandé. Sans argument, le fichier par défaut du
+/// répertoire courant est utilisé s'il existe; sinon le profil intégré prend
+/// le relais, pour que le binaire fonctionne hors du dépôt.
+fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
+    if let Some(path) = path {
+        return Profile::load(path);
+    }
+    let default = Path::new(DEFAULT_PROFILE_PATH);
+    if default.exists() {
+        return Profile::load(default);
+    }
+    Profile::from_toml(BUILTIN_PROFILE, "profil intégré 2560x1440")
+}
+
+/// Charge la configuration demandée, avec le même repli que le profil.
+fn resolve_config(path: Option<&Path>) -> Result<Config> {
+    if let Some(path) = path {
+        return Config::load(path);
+    }
+    let default = Path::new(DEFAULT_CONFIG_PATH);
+    if default.exists() {
+        return Config::load(default);
+    }
+    Config::from_toml(BUILTIN_CONFIG, "configuration intégrée")
+}
+
+fn capture_live(output: &Path, profile_path: Option<&Path>) -> Result<()> {
+    let profile = resolve_profile(profile_path)?;
     let x11 = platform::x11::X11::new()?;
     let window = x11.find_game_window()?;
     println!(
@@ -218,8 +251,8 @@ fn capture_live(output: &Path, profile_path: &Path) -> Result<()> {
 
 fn run(
     image_path: Option<&Path>,
-    profile_path: &Path,
-    config_path: &Path,
+    profile_path: Option<&Path>,
+    config_path: Option<&Path>,
     execute: bool,
     max_transmutations: Option<usize>,
     until_done: bool,
@@ -227,8 +260,8 @@ fn run(
     audit_every: usize,
     debug: bool,
 ) -> Result<()> {
-    let profile = Profile::load(profile_path)?;
-    let config = Config::load(config_path)?;
+    let profile = resolve_profile(profile_path)?;
+    let config = resolve_config(config_path)?;
     let templates = TemplateSet::load()?;
     let limit = resolve_run_limit(until_done, max_transmutations)?;
     let options = executor::RunOptions {
@@ -245,8 +278,8 @@ fn run(
     }
 }
 
-fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
-    let profile = Profile::load(profile_path)?;
+fn inspect(image_path: &Path, profile_path: Option<&Path>, debug: bool) -> Result<()> {
+    let profile = resolve_profile(profile_path)?;
     let game = load_game_image(image_path, &profile)?;
     let templates = TemplateSet::load()?;
     let table = table::read_table(&game, &profile, &templates, debug)?;
@@ -278,13 +311,13 @@ fn inspect(image_path: &Path, profile_path: &Path, debug: bool) -> Result<()> {
 
 fn plan(
     image_path: &Path,
-    profile_path: &Path,
-    config_path: &Path,
+    profile_path: Option<&Path>,
+    config_path: Option<&Path>,
     max_transmutations: Option<usize>,
     start_tier: usize,
     debug: bool,
 ) -> Result<()> {
-    let profile = Profile::load(profile_path)?;
+    let profile = resolve_profile(profile_path)?;
     let game = load_game_image(image_path, &profile)?;
     let templates = TemplateSet::load()?;
     let table = table::read_table(&game, &profile, &templates, debug)?;
@@ -306,7 +339,7 @@ fn plan(
         bail!("impossible de planifier: la lecture du tableau n'est pas fiable");
     }
 
-    let config = Config::load(config_path)?;
+    let config = resolve_config(config_path)?;
     let keep = config.keep_matrix()?;
     let counts = counts_from_table(&table)?;
     let plan = match max_transmutations {
