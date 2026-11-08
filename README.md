@@ -124,3 +124,12 @@ config parsing, and action verification rules.
 - `src/logging.rs`: console and file journal in the per-run temporary directory.
 - `profiles/2560x1440.toml`: measured layout, tabs, and click points.
 - `assets/exocet-blizzard-medium.ttf`: the game font used for templates.
+
+## License
+
+The code is licensed under the GNU General Public License, version 3
+(GPL-3.0). See [LICENSE](LICENSE).
+
+The bundled game assets, specifically the Exocet font and the footage in the
+demo GIF, belong to Blizzard Entertainment and are not covered by this
+license.
