@@ -23,7 +23,8 @@ use crate::vision::table::{self, GEM_TYPES, TIERS};
 #[derive(Debug, Clone, Copy)]
 pub struct RunOptions {
     pub execute: bool,
-    pub max_transmutations: usize,
+    /// `None` signifie jusqu'à épuisement des actions valides.
+    pub max_transmutations: Option<usize>,
     pub start_tier: usize,
     pub audit_every: usize,
     pub debug: bool,
@@ -220,6 +221,9 @@ fn run_live_inner(
         "Départ: {} ({})",
         TIERS[options.start_tier], options.start_tier
     ));
+    if options.max_transmutations.is_none() {
+        logger.log("Mode: jusqu'à épuisement des actions valides.");
+    }
 
     if !options.execute {
         if let Some(action) = planner::next_action(&counts, &keep, options.start_tier) {
@@ -241,7 +245,14 @@ fn run_live_inner(
     let started = Instant::now();
     let mut performed = [[0u32; 4]; 7];
 
-    for step in 1..=options.max_transmutations {
+    let mut step = 0usize;
+    loop {
+        step += 1;
+        if let Some(max) = options.max_transmutations {
+            if step > max {
+                break;
+            }
+        }
         check_emergency(x11)?;
         if x11.take_pause() || crate::hotkeys::take_pause() {
             wait_for_resume(x11, window, profile, templates, logger, &mut counts)?;

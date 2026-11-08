@@ -94,9 +94,12 @@ enum Command {
         /// Fait réellement les clics. Sans ce drapeau, le programme simule.
         #[arg(long)]
         execute: bool,
-        /// Nombre maximal de transmutations à exécuter.
-        #[arg(long, default_value_t = 1)]
-        max_transmutations: usize,
+        /// Nombre maximal de transmutations (défaut: 1).
+        #[arg(long)]
+        max_transmutations: Option<usize>,
+        /// Exécute jusqu'à ce qu'il n'y ait plus d'action valide.
+        #[arg(long)]
+        until_done: bool,
         /// Palier source minimal (0=abîmé, 1=imparfait, 2=normal, 3=sans défaut).
         #[arg(
             long,
@@ -144,6 +147,7 @@ fn main() -> Result<()> {
             config,
             execute,
             max_transmutations,
+            until_done,
             start_tier,
             audit_every,
             debug,
@@ -153,10 +157,20 @@ fn main() -> Result<()> {
             &config,
             execute,
             max_transmutations,
+            until_done,
             start_tier,
             audit_every,
             debug,
         ),
+    }
+}
+
+fn resolve_run_limit(until_done: bool, max_transmutations: Option<usize>) -> Result<Option<usize>> {
+    match (until_done, max_transmutations) {
+        (true, Some(_)) => bail!("--until-done et --max-transmutations sont incompatibles"),
+        (true, None) => Ok(None),
+        (false, Some(max)) => Ok(Some(max)),
+        (false, None) => Ok(Some(1)),
     }
 }
 
@@ -207,7 +221,8 @@ fn run(
     profile_path: &Path,
     config_path: &Path,
     execute: bool,
-    max_transmutations: usize,
+    max_transmutations: Option<usize>,
+    until_done: bool,
     start_tier: usize,
     audit_every: usize,
     debug: bool,
@@ -215,9 +230,10 @@ fn run(
     let profile = Profile::load(profile_path)?;
     let config = Config::load(config_path)?;
     let templates = TemplateSet::load()?;
+    let limit = resolve_run_limit(until_done, max_transmutations)?;
     let options = executor::RunOptions {
         execute,
-        max_transmutations,
+        max_transmutations: limit,
         start_tier,
         audit_every,
         debug,
@@ -486,5 +502,21 @@ fn cell_text(value: Option<u16>, width: usize) -> String {
     match value {
         Some(value) => format!("{value:>width$}"),
         None => format!("{:>width$}", "?"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_run_limit;
+
+    #[test]
+    fn run_limit_defaults_and_until_done() {
+        assert_eq!(resolve_run_limit(false, None).expect("défaut"), Some(1));
+        assert_eq!(resolve_run_limit(false, Some(3)).expect("limite"), Some(3));
+        assert_eq!(
+            resolve_run_limit(true, None).expect("jusqu'à épuisement"),
+            None
+        );
+        assert!(resolve_run_limit(true, Some(3)).is_err());
     }
 }
