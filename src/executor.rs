@@ -507,7 +507,10 @@ fn retrieve_with_retry(
             {
                 return Ok(());
             }
-            bail!("le cube est vide mais la quantité cible n'a pas augmenté");
+            bail!(
+                "le cube est vide mais la quantité cible n'a pas augmenté; \
+                 vérifie l'inventaire, une gemme a peut-être été déplacée"
+            );
         };
 
         let (result_x, result_y) = cube_slot_point(window, profile, result_slot);

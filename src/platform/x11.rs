@@ -299,7 +299,10 @@ impl X11 {
         self.move_pointer(x, y)?;
         sleep(Duration::from_millis(30));
 
-        self.press_modifiers(modifiers)?;
+        if let Err(error) = self.press_modifiers(modifiers) {
+            let _ = self.release_modifiers(modifiers);
+            return Err(error);
+        }
         let click_result = self.press_and_release_button(button);
         let release_result = self.release_modifiers(modifiers);
         click_result?;
@@ -321,7 +324,7 @@ impl X11 {
             .xtest_fake_input(XTEST_BUTTON_PRESS, button.code(), 0, self.root, 0, 0, 0)
             .context("XTest button press a échoué")?;
         self.connection.flush().context("flush X11 impossible")?;
-        sleep(Duration::from_millis(40));
+        sleep(Duration::from_millis(60));
         self.connection
             .xtest_fake_input(XTEST_BUTTON_RELEASE, button.code(), 0, self.root, 0, 0, 0)
             .context("XTest button release a échoué")?;
@@ -335,9 +338,31 @@ impl X11 {
             self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
             self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
             self.connection.flush().context("flush X11 impossible")?;
-            sleep(Duration::from_millis(10));
+            sleep(Duration::from_millis(60));
+
+            if !self.modifiers_down()? {
+                self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
+                self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
+                self.connection.flush().context("flush X11 impossible")?;
+                sleep(Duration::from_millis(60));
+                if !self.modifiers_down()? {
+                    bail!("Ctrl+Shift ne sont pas actifs avant le clic");
+                }
+            }
         }
         Ok(())
+    }
+
+    fn modifiers_down(&self) -> Result<bool> {
+        let keys = self
+            .connection
+            .query_keymap()
+            .context("XQueryKeymap a échoué")?
+            .reply()
+            .context("XQueryKeymap sans réponse")?
+            .keys;
+        let is_down = |keycode: u8| keys[(keycode / 8) as usize] & (1 << (keycode % 8)) != 0;
+        Ok(is_down(self.ctrl_keycode) && is_down(self.shift_keycode))
     }
 
     fn release_modifiers(&self, modifiers: Modifiers) -> Result<()> {
