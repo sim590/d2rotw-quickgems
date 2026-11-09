@@ -73,8 +73,19 @@ order: `abime`, `imparfait`, `normal`, `sans_defaut`, `parfait`.
 
 Overrides are optional; omitted fields fall back to `[keep.default]`.
 
-`--profile` and `--config` are optional. If omitted, the built-in 2560x1440
-profile and the built-in configuration are used. An explicit path always wins.
+`--config` is optional. The configuration is resolved in this order:
+
+1. the path given with `--config`;
+2. the platform user configuration file, if present. On Linux this is
+   `$XDG_CONFIG_HOME/d2rotw-quickgems/quickgems.toml`, or
+   `~/.config/d2rotw-quickgems/quickgems.toml` when `XDG_CONFIG_HOME` is
+   unset;
+3. the built-in default configuration.
+
+An existing but invalid user configuration is an error; it is never silently
+ignored.
+
+`--profile` is optional; the built-in 2560x1440 profile is used when omitted.
 
 ## Safety
 

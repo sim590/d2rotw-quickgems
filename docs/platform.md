@@ -9,12 +9,12 @@ chargement dynamique, ni sélection au runtime.
 
 ## Les quatre contrats
 
-| Trait | Responsabilité |
-|---|---|
-| `WindowSystem` | trouver la fenêtre du jeu, la mettre au premier plan, vérifier le focus |
-| `ScreenCapture` | capturer la zone cliente de la fenêtre |
-| `InputInjector` | déplacer le pointeur, cliquer avec modificateurs, garde-fou du pointeur |
-| `ControlSignals` | pause et arrêt d'urgence lus sur la plateforme |
+| Trait            | Responsabilité                                                          |
+|------------------|-------------------------------------------------------------------------|
+| `WindowSystem`   | trouver la fenêtre du jeu, la mettre au premier plan, vérifier le focus |
+| `ScreenCapture`  | capturer la zone cliente de la fenêtre                                  |
+| `InputInjector`  | déplacer le pointeur, cliquer avec modificateurs, garde-fou du pointeur |
+| `ControlSignals` | pause et arrêt d'urgence lus sur la plateforme                          |
 
 `Platform` est un trait englobant, implémenté automatiquement pour tout type
 qui implémente les quatre. L'exécuteur est générique (`&impl Platform`), donc
@@ -129,6 +129,31 @@ utilise `&impl Platform`.
   que le jeu : Wine implémente `EnumWindows`, `SendInput` et GDI. Windows
   Graphics Capture n'est pas disponible sous Wine; prévoir un repli GDI
   (`PrintWindow`/`BitBlt`).
+
+## Configuration utilisateur
+
+`ConfigLocator` (dans `src/platform/paths.rs`) localise le fichier de
+configuration utilisateur. Le trait ne charge rien : il retourne les chemins à
+essayer, du plus prioritaire au moins prioritaire.
+
+```rust
+pub trait ConfigLocator {
+    fn config_paths(&self) -> Vec<PathBuf>;
+}
+```
+
+Linux utilise `dirs::config_dir()` (crate `dirs`) : `XDG_CONFIG_HOME` s'il est
+défini et absolu, sinon `~/.config`. Le fichier attendu est
+`d2rotw-quickgems/quickgems.toml`.
+
+L'ordre de priorité est appliqué par `main::resolve_config` :
+
+1. `--config <chemin>`;
+2. fichier utilisateur existant;
+3. configuration intégrée.
+
+Un fichier utilisateur présent mais invalide est une erreur, jamais un repli
+silencieux. Le profil n'utilise pas encore ce mécanisme.
 
 ## Particularités connues
 
