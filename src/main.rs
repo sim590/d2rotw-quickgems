@@ -7,6 +7,7 @@ mod platform;
 mod profile;
 mod vision;
 
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
@@ -204,7 +205,8 @@ fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
 
 /// Charge la configuration demandée. Priorité :
 /// 1. chemin explicite (`--config`);
-/// 2. fichier utilisateur de la plateforme, s'il existe;
+/// 2. fichier utilisateur de la plateforme, créé au besoin à partir du
+///    contenu intégré;
 /// 3. configuration intégrée au binaire.
 fn resolve_config(path: Option<&Path>, locator: &impl platform::ConfigLocator) -> Result<Config> {
     if let Some(path) = path {
@@ -215,9 +217,41 @@ fn resolve_config(path: Option<&Path>, locator: &impl platform::ConfigLocator) -
         if candidate.exists() {
             return Config::load(&candidate);
         }
+
+        match create_user_config(&candidate) {
+            Ok(()) => {
+                println!("Configuration utilisateur créée: {}", candidate.display());
+                return Config::load(&candidate);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Attention: impossible de créer {}: {error}; \
+                     configuration intégrée utilisée.",
+                    candidate.display()
+                );
+            }
+        }
     }
 
     Config::from_toml(BUILTIN_CONFIG, "configuration intégrée")
+}
+
+/// Crée le fichier de configuration utilisateur à partir du contenu intégré.
+/// Le fichier n'est jamais écrasé, même en cas de course entre processus.
+fn create_user_config(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => file.write_all(BUILTIN_CONFIG.as_bytes()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn capture_live(output: &Path, profile_path: Option<&Path>) -> Result<()> {
@@ -567,6 +601,34 @@ mod tests {
         }
     }
 
+    /// Répertoire temporaire supprimé à la fin du test.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "d2rotw-quickgems-test-dir-{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&path).expect("répertoire temporaire");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
     /// Fichier de configuration temporaire, supprimé à la fin du test.
     struct TempConfig {
         path: PathBuf,
@@ -576,7 +638,7 @@ mod tests {
         fn new(content: &str) -> Self {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "d2rotw-quickgems-test-{}-{}",
+                "d2rotw-quickgems-test-cfg-{}-{}",
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::SeqCst)
             ));
@@ -641,11 +703,51 @@ mod tests {
     }
 
     #[test]
-    fn missing_user_config_falls_back_to_builtin() {
-        let locator = MockLocator(vec![PathBuf::from("/nonexistent/quickgems.toml")]);
+    fn creates_user_config_when_missing() {
+        let dir = TempDir::new();
+        let path = dir.path().join("d2rotw-quickgems").join("quickgems.toml");
+        let locator = MockLocator(vec![path.clone()]);
+
+        let config = resolve_config(None, &locator).expect("configuration");
+
+        assert!(path.exists(), "le fichier utilisateur doit être créé");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("lecture"),
+            BUILTIN_CONFIG
+        );
+        assert_eq!(config.keep_matrix().expect("keep"), builtin_keep());
+    }
+
+    #[test]
+    fn does_not_overwrite_an_existing_user_config() {
+        let user = TempConfig::new("[keep.default]\nnormal = 7\n");
+        let locator = MockLocator(vec![user.path().to_path_buf()]);
+
+        let config = resolve_config(None, &locator).expect("configuration");
+
+        assert_eq!(normal_keep(&config), 7);
+        assert_eq!(
+            std::fs::read_to_string(user.path()).expect("lecture"),
+            "[keep.default]\nnormal = 7\n"
+        );
+    }
+
+    #[test]
+    fn falls_back_when_user_config_cannot_be_created() {
+        let dir = TempDir::new();
+        let blocker = dir.path().join("fichier");
+        std::fs::write(&blocker, "x").expect("fichier bloquant");
+        // Le parent est un fichier: la création du répertoire doit échouer.
+        let locator = MockLocator(vec![blocker.join("quickgems.toml")]);
 
         let config = resolve_config(None, &locator).expect("configuration");
         assert_eq!(config.keep_matrix().expect("keep"), builtin_keep());
+    }
+
+    #[test]
+    fn explicit_missing_config_is_an_error() {
+        let locator = MockLocator(Vec::new());
+        assert!(resolve_config(Some(Path::new("/nonexistent/quickgems.toml")), &locator).is_err());
     }
 
     #[test]
