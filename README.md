@@ -82,8 +82,10 @@ Overrides are optional; omitted fields fall back to `[keep.default]`.
    unset;
 3. the built-in default configuration.
 
-An existing but invalid user configuration is an error; it is never silently
-ignored.
+If the user configuration file does not exist, it is created on first use
+from the built-in default, so you can find and edit it directly. It is never
+overwritten. An existing but invalid user configuration is an error; it is
+never silently ignored.
 
 `--profile` is optional; the built-in 2560x1440 profile is used when omitted.
 

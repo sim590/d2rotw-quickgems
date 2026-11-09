@@ -149,8 +149,14 @@ défini et absolu, sinon `~/.config`. Le fichier attendu est
 L'ordre de priorité est appliqué par `main::resolve_config` :
 
 1. `--config <chemin>`;
-2. fichier utilisateur existant;
+2. fichier utilisateur, créé au besoin à partir du contenu intégré;
 3. configuration intégrée.
+
+Le fichier utilisateur est créé à la première utilisation avec le contenu
+intégré tel quel (commentaires compris). Il n'est jamais écrasé, même en cas
+de course entre processus (`create_new`). Si sa création échoue (répertoire en
+lecture seule, par exemple), un avertissement est affiché et la configuration
+intégrée est utilisée.
 
 Un fichier utilisateur présent mais invalide est une erreur, jamais un repli
 silencieux. Le profil n'utilise pas encore ce mécanisme.
