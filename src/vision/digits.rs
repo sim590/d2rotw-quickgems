@@ -167,10 +167,34 @@ pub fn read_count(
     }
 
     if let Some(base) = base_best {
-        // La fenêtre étroite peut couper le premier chiffre et ne garder que
-        // le dernier: « 30 » se lit alors « 0 ». Si la fenêtre large lit un
-        // nombre à deux chiffres qui finit par le même chiffre, c'est elle qui
-        // porte le nombre complet.
+        // Une fenêtre dont le masque touche son bord gauche coupe le premier
+        // chiffre: un « 40 » peut alors se lire « 10 ». La fenêtre large voit
+        // le nombre complet; on la préfère quand elle marque mieux.
+        let roi_width = roi.width() as usize;
+        let window_start = roi_width.saturating_sub(base.window);
+        let cut_first_digit = base
+            .bbox
+            .map(|bbox| bbox.x as usize <= window_start && bbox.width as usize + 2 >= base.window)
+            .unwrap_or(false);
+        if cut_first_digit {
+            if let Some(wide) = &wide_best {
+                if wide.score > base.score {
+                    if let Some(candidate) = wide.best_candidate {
+                        let mut reading = wide.clone();
+                        reading.number = Some(candidate);
+                        reading.corroborated = true;
+                        reading.note =
+                            Some("nombre complet lu hors d'une fenêtre étroite coupée".to_string());
+                        return reading;
+                    }
+                }
+            }
+        }
+
+        // La fenêtre étroite peut aussi ne garder que le dernier chiffre:
+        // « 30 » se lit alors « 0 ». Si la fenêtre large lit un nombre à deux
+        // chiffres qui finit par le même chiffre, c'est elle qui porte le
+        // nombre complet.
         if let Some(digit) = base.best_candidate.filter(|digit| *digit < 10) {
             if let Some(wide) = &wide_best {
                 if let Some(candidate) = wide.best_candidate {
@@ -612,6 +636,18 @@ mod tests {
         let templates = TemplateSet::load().expect("templates");
         let reading = read_count(&roi, 14, &templates, false);
         assert_eq!(reading.best_candidate, Some(30));
+        assert!(reading.is_confident());
+    }
+
+    #[test]
+    fn reads_topaze_parfait_40_behind_a_cut_window() {
+        let bytes = include_bytes!("../../tests/fixtures/topaze_parfait_40.png");
+        let roi = image::load_from_memory(bytes)
+            .expect("fixture PNG")
+            .to_rgb8();
+        let templates = TemplateSet::load().expect("templates");
+        let reading = read_count(&roi, 14, &templates, false);
+        assert_eq!(reading.best_candidate, Some(40));
         assert!(reading.is_confident());
     }
 
