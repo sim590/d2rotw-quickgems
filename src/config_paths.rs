@@ -1,9 +1,9 @@
 //! Localisation des fichiers de configuration utilisateur.
 //!
-//! Le tracé des chemins est une préoccupation de plateforme : XDG sur Linux,
-//! `%APPDATA%` sur Windows, `Application Support` sur macOS. Ce module ne
-//! charge rien : il donne les chemins à essayer, du plus prioritaire au moins
-//! prioritaire, et l'appelant décide quoi faire.
+//! Les conventions de chemin sont propres à l'OS (XDG sur Linux, `%APPDATA%`
+//! sur Windows, `Application Support` sur macOS), mais elles sont déléguées à
+//! la crate `dirs`. Ce module ne charge rien : il donne les chemins à essayer,
+//! du plus prioritaire au moins prioritaire, et l'appelant décide quoi faire.
 
 use std::path::{Path, PathBuf};
 

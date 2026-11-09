@@ -17,10 +17,6 @@ pub mod x11;
 #[cfg(test)]
 pub mod mock;
 
-mod paths;
-
-pub use paths::{ConfigLocator, NativePaths};
-
 /// Point en coordonnées écran globales. Les moniteurs à coordonnées négatives
 /// sont permis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

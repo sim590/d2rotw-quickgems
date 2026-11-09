@@ -1,4 +1,5 @@
 mod config;
+mod config_paths;
 mod executor;
 mod hotkeys;
 mod logging;
@@ -208,7 +209,10 @@ fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
 /// 2. fichier utilisateur de la plateforme, créé au besoin à partir du
 ///    contenu intégré;
 /// 3. configuration intégrée au binaire.
-fn resolve_config(path: Option<&Path>, locator: &impl platform::ConfigLocator) -> Result<Config> {
+fn resolve_config(
+    path: Option<&Path>,
+    locator: &impl config_paths::ConfigLocator,
+) -> Result<Config> {
     if let Some(path) = path {
         return Config::load(path);
     }
@@ -294,7 +298,7 @@ fn run(
     debug: bool,
 ) -> Result<()> {
     let profile = resolve_profile(profile_path)?;
-    let config = resolve_config(config_path, &platform::NativePaths)?;
+    let config = resolve_config(config_path, &config_paths::NativePaths)?;
     let templates = TemplateSet::load()?;
     let limit = resolve_run_limit(until_done, max_transmutations)?;
     let options = executor::RunOptions {
@@ -373,7 +377,7 @@ fn plan(
         bail!("impossible de planifier: la lecture du tableau n'est pas fiable");
     }
 
-    let config = resolve_config(config_path, &platform::NativePaths)?;
+    let config = resolve_config(config_path, &config_paths::NativePaths)?;
     let keep = config.keep_matrix()?;
     let counts = counts_from_table(&table)?;
     let plan = match max_transmutations {
@@ -591,7 +595,7 @@ mod tests {
 
     use super::{resolve_config, resolve_run_limit, BUILTIN_CONFIG};
     use crate::config::Config;
-    use crate::platform::ConfigLocator;
+    use crate::config_paths::ConfigLocator;
 
     struct MockLocator(Vec<PathBuf>);
 

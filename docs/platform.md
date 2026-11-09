@@ -130,39 +130,6 @@ utilise `&impl Platform`.
   Graphics Capture n'est pas disponible sous Wine; prévoir un repli GDI
   (`PrintWindow`/`BitBlt`).
 
-## Configuration utilisateur
-
-`ConfigLocator` (dans `src/platform/paths.rs`) localise le fichier de
-configuration utilisateur. Le trait ne charge rien : il retourne les chemins à
-essayer, du plus prioritaire au moins prioritaire.
-
-```rust
-pub trait ConfigLocator {
-    fn config_paths(&self) -> Vec<PathBuf>;
-}
-```
-
-L'implémentation est commune aux plateformes : `dirs::config_dir()` fournit la
-base propre à l'OS (`XDG_CONFIG_HOME` ou `~/.config` sur Linux, `%APPDATA%` sur
-Windows, `~/Library/Application Support` sur macOS), puis le chemin
-`d2rotw-quickgems/quickgems.toml` est ajouté. Une implémentation propre n'est
-nécessaire que si les conventions d'une plateforme divergent.
-
-L'ordre de priorité est appliqué par `main::resolve_config` :
-
-1. `--config <chemin>`;
-2. fichier utilisateur, créé au besoin à partir du contenu intégré;
-3. configuration intégrée.
-
-Le fichier utilisateur est créé à la première utilisation avec le contenu
-intégré tel quel (commentaires compris). Il n'est jamais écrasé, même en cas
-de course entre processus (`create_new`). Si sa création échoue (répertoire en
-lecture seule, par exemple), un avertissement est affiché et la configuration
-intégrée est utilisée.
-
-Un fichier utilisateur présent mais invalide est une erreur, jamais un repli
-silencieux. Le profil n'utilise pas encore ce mécanisme.
-
 ## Particularités connues
 
 ### Windows
