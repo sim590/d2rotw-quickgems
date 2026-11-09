@@ -60,6 +60,7 @@ impl Timing {
         }
     }
 
+    #[cfg(test)]
     pub fn fast() -> Self {
         Self {
             after_focus: Duration::from_millis(1),
@@ -885,7 +886,7 @@ fn wait_for_resume(
                 }
             }
         }
-        sleep(Duration::from_millis(200));
+        sleep(timing.poll);
     }
 }
 
