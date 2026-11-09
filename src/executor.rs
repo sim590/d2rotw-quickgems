@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::config::Config;
 use crate::logging::{epoch_seconds, Logger};
 use crate::planner;
-use crate::platform::x11::{GameWindow, Modifiers, MouseButton, X11};
+use crate::platform::{Modifiers, MouseButton, Platform, Point, WindowInfo};
 use crate::profile::Profile;
 use crate::vision::cube::{self, CubeReading};
 use crate::vision::digits::{CountReading, TemplateSet};
@@ -28,6 +28,49 @@ pub struct RunOptions {
     pub start_tier: usize,
     pub audit_every: usize,
     pub debug: bool,
+    pub timing: Timing,
+}
+
+/// Temporisations d'orchestration de l'exécuteur.
+///
+/// Les délais internes au clic (maintien des modificateurs, du bouton, etc.)
+/// restent dans le composant dorsal : ils font partie de la garantie du
+/// contrat. Ces valeurs-ci ne concernent que la boucle d'exécution.
+#[derive(Debug, Clone, Copy)]
+pub struct Timing {
+    pub after_focus: Duration,
+    pub transmute_wait: Duration,
+    pub poll: Duration,
+    pub park_settle: Duration,
+    pub retry_pause: Duration,
+    pub cell_timeout: Duration,
+    pub cube_timeout: Duration,
+}
+
+impl Timing {
+    pub fn real() -> Self {
+        Self {
+            after_focus: Duration::from_millis(200),
+            transmute_wait: Duration::from_millis(350),
+            poll: Duration::from_millis(60),
+            park_settle: Duration::from_millis(60),
+            retry_pause: Duration::from_millis(100),
+            cell_timeout: Duration::from_secs(2),
+            cube_timeout: Duration::from_millis(500),
+        }
+    }
+
+    pub fn fast() -> Self {
+        Self {
+            after_focus: Duration::from_millis(1),
+            transmute_wait: Duration::from_millis(1),
+            poll: Duration::from_millis(1),
+            park_settle: Duration::from_millis(1),
+            retry_pause: Duration::from_millis(1),
+            cell_timeout: Duration::from_millis(5),
+            cube_timeout: Duration::from_millis(5),
+        }
+    }
 }
 
 /// Erreur d'arrêt de sécurité : on ne tente pas de reprendre le cube, car
@@ -119,19 +162,32 @@ pub fn run_live(
     options: RunOptions,
 ) -> Result<()> {
     let _terminal_guard = crate::hotkeys::start_terminal();
-    let x11 = X11::new()?;
-    let window = x11.find_game_window()?;
+    let platform = crate::platform::native()?;
+    run_on_platform(&platform, profile, config, templates, options)
+}
+
+/// Boucle d'exécution sur une plateforme donnée. Séparée de `run_live` pour
+/// que les tests puissent fournir une implémentation factice.
+fn run_on_platform(
+    platform: &impl Platform,
+    profile: &Profile,
+    config: &Config,
+    templates: &TemplateSet,
+    options: RunOptions,
+) -> Result<()> {
+    let window = platform.find_game_window()?;
+    let timing = options.timing;
     let mut logger = Logger::new();
     let log_path = logger.path().display().to_string();
     logger.log(format!("Journal: {log_path}"));
     logger.log(format!(
         "Fenêtre: {} ({}x{}) @ ({}, {})",
-        window.title, window.width, window.height, window.x, window.y
+        window.title, window.size.width, window.size.height, window.origin.x, window.origin.y
     ));
     logger.log("Pause/reprise: F8. Arrêt d'urgence: F9 ou mouvement de souris.");
 
     let result = run_live_inner(
-        &x11,
+        platform,
         &window,
         profile,
         config,
@@ -143,9 +199,9 @@ pub fn run_live(
     if let Err(error) = &result {
         logger.log(format!("ERREUR: {error:#}"));
         notify("QuickGems - erreur", &format!("{error:#}"));
-        save_error_frame(&x11, &window, &mut logger);
+        save_error_frame(platform, &window, &mut logger);
         if error.downcast_ref::<SafetyStop>().is_none() {
-            match recover_cube(&x11, &window, profile, &mut logger) {
+            match recover_cube(platform, &window, profile, &mut logger, timing) {
                 Ok(()) => logger.log("Reprise: cube vidé."),
                 Err(recovery_error) => {
                     logger.log(format!("Reprise impossible: {recovery_error:#}"));
@@ -160,28 +216,30 @@ pub fn run_live(
 }
 
 fn run_live_inner(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     config: &Config,
     templates: &TemplateSet,
     options: RunOptions,
     logger: &mut Logger,
 ) -> Result<()> {
-    if window.width != profile.image_width || window.height != profile.image_height {
+    let timing = options.timing;
+    if window.size.width != profile.image_width || window.size.height != profile.image_height {
         return Err(safety(format!(
             "la fenêtre du jeu fait {}x{}, mais le profil attend {}x{}",
-            window.width, window.height, profile.image_width, profile.image_height
+            window.size.width, window.size.height, profile.image_width, profile.image_height
         )));
     }
 
-    x11.focus_window(window)
+    platform
+        .focus(window)
         .map_err(|error| safety(format!("impossible de donner le focus au jeu: {error:#}")))?;
-    sleep(Duration::from_millis(200));
-    check_focus(x11, window)?;
+    sleep(timing.after_focus);
+    check_focus(platform, window)?;
 
-    park(x11, window, profile)?;
-    let image = x11.capture_window(window)?;
+    park(platform, window, profile, timing)?;
+    let image = platform.capture(window)?;
     let table = table::read_table(&image, profile, templates, options.debug)
         .map_err(|error| safety(format!("lecture de la table impossible: {error:#}")))?;
     if !table.tab_active {
@@ -227,12 +285,14 @@ fn run_live_inner(
 
     if !options.execute {
         if let Some(action) = planner::next_action(&counts, &keep, options.start_tier) {
-            let (x, y) = cell_click_point(window, profile, action.gem_type, action.tier);
+            let point = cell_click_point(window, profile, action.gem_type, action.tier);
             logger.log(format!(
-                "Mode simulation: première action {} {} -> {} (clic source à {x},{y})",
+                "Mode simulation: première action {} {} -> {} (clic source à {},{})",
                 GEM_TYPES[action.gem_type],
                 TIERS[action.tier],
-                TIERS[action.tier + 1]
+                TIERS[action.tier + 1],
+                point.x,
+                point.y
             ));
         } else {
             logger.log("Aucune transmutation à faire.");
@@ -240,6 +300,7 @@ fn run_live_inner(
         return Ok(());
     }
 
+    let timing = options.timing;
     let mut counts = counts;
     let mut done = 0usize;
     let started = Instant::now();
@@ -253,11 +314,19 @@ fn run_live_inner(
                 break;
             }
         }
-        check_emergency(x11)?;
-        if x11.take_pause() || crate::hotkeys::take_pause() {
-            wait_for_resume(x11, window, profile, templates, logger, &mut counts)?;
+        check_emergency(platform)?;
+        if platform.take_pause() || crate::hotkeys::take_pause() {
+            wait_for_resume(
+                platform,
+                window,
+                profile,
+                templates,
+                logger,
+                &mut counts,
+                timing,
+            )?;
         }
-        check_focus(x11, window)?;
+        check_focus(platform, window)?;
 
         let Some(action) = planner::next_action(&counts, &keep, options.start_tier) else {
             report_full_receivers(logger, &counts, &keep, options.start_tier);
@@ -275,7 +344,7 @@ fn run_live_inner(
         ));
 
         acquire_source(
-            x11,
+            platform,
             window,
             profile,
             templates,
@@ -283,9 +352,10 @@ fn run_live_inner(
             action.gem_type,
             action.tier,
             source_before,
+            timing,
         )?;
 
-        let cube_after_source = read_cube_live(x11, window, profile)?;
+        let cube_after_source = read_cube_live(platform, window, profile, timing)?;
         let occupied = cube_after_source
             .occupied
             .iter()
@@ -301,11 +371,11 @@ fn run_live_inner(
             );
         }
 
-        let result_slot = transmute_with_retry(x11, window, profile, logger)?;
+        let result_slot = transmute_with_retry(platform, window, profile, logger, timing)?;
         logger.log(format!("  gemme transmutée dans la case {result_slot}"));
 
         retrieve_with_retry(
-            x11,
+            platform,
             window,
             profile,
             templates,
@@ -313,6 +383,7 @@ fn run_live_inner(
             action.gem_type,
             action.tier + 1,
             target_before,
+            timing,
         )?;
 
         counts[action.gem_type][action.tier] = source_before.saturating_sub(3);
@@ -321,15 +392,17 @@ fn run_live_inner(
         done += 1;
 
         if options.audit_every > 0 && step % options.audit_every == 0 {
-            audit_table(x11, window, profile, templates, logger, &counts, step)?;
+            audit_table(
+                platform, window, profile, templates, logger, &counts, step, timing,
+            )?;
         }
         logger.log("  ok");
     }
 
     logger.log(format!("{done} transmutation(s) effectuée(s)."));
 
-    park(x11, window, profile)?;
-    let final_image = x11.capture_window(window)?;
+    park(platform, window, profile, timing)?;
+    let final_image = platform.capture(window)?;
     let final_table = table::read_table(&final_image, profile, templates, false)?;
     let model_total: u32 = counts.iter().flatten().sum();
     logger.log(format!("Total selon le modèle: {model_total}"));
@@ -380,33 +453,27 @@ fn run_live_inner(
 /// du nombre source est en retard. Si seulement 1 ou 2 gemmes sont arrivées,
 /// on complète avec des clics gauches.
 fn acquire_source(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     logger: &mut Logger,
     col: usize,
     row: usize,
     source_before: u32,
+    timing: Timing,
 ) -> Result<()> {
     let expected = source_before.saturating_sub(3);
-    let (source_x, source_y) = cell_click_point(window, profile, col, row);
+    let source_point = cell_click_point(window, profile, col, row);
 
     for attempt in 1..=3 {
-        check_focus(x11, window)?;
-        check_emergency(x11)?;
-        check_tab_live(x11, window, profile)?;
-        x11.click(source_x, source_y, MouseButton::Right, Modifiers::CtrlShift)?;
+        check_focus(platform, window)?;
+        check_emergency(platform)?;
+        check_tab_live(platform, window, profile)?;
+        platform.click(source_point, MouseButton::Right, Modifiers::CTRL_SHIFT)?;
 
         if let Some(reading) = wait_cell(
-            x11,
-            window,
-            profile,
-            templates,
-            col,
-            row,
-            expected,
-            Duration::from_secs(2),
+            platform, window, profile, templates, col, row, expected, timing,
         )? {
             if !reading.is_confident() {
                 logger.log(format!(
@@ -417,7 +484,7 @@ fn acquire_source(
             return Ok(());
         }
 
-        let cube = read_cube_live(x11, window, profile)?;
+        let cube = read_cube_live(platform, window, profile, timing)?;
         let occupied = cube.occupied.iter().filter(|occupied| **occupied).count();
         logger.log(format!(
             "  source tentative {attempt}: {occupied} gemme(s) dans le cube"
@@ -427,13 +494,13 @@ fn acquire_source(
             3 => return Ok(()),
             1 | 2 => {
                 for _ in occupied..3 {
-                    check_focus(x11, window)?;
-                    check_emergency(x11)?;
-                    check_tab_live(x11, window, profile)?;
-                    x11.click(source_x, source_y, MouseButton::Left, Modifiers::CtrlShift)?;
-                    sleep(Duration::from_millis(100));
+                    check_focus(platform, window)?;
+                    check_emergency(platform)?;
+                    check_tab_live(platform, window, profile)?;
+                    platform.click(source_point, MouseButton::Left, Modifiers::CTRL_SHIFT)?;
+                    sleep(timing.retry_pause);
                 }
-                let cube = read_cube_live(x11, window, profile)?;
+                let cube = read_cube_live(platform, window, profile, timing)?;
                 let completed = cube.occupied.iter().filter(|occupied| **occupied).count();
                 if completed == 3 {
                     return Ok(());
@@ -449,21 +516,33 @@ fn acquire_source(
 }
 
 fn transmute_with_retry(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     logger: &mut Logger,
+    timing: Timing,
 ) -> Result<usize> {
-    let (transmute_x, transmute_y) = transmute_point(window, profile);
+    let transmute_at = transmute_point(window, profile);
 
     for attempt in 1..=3 {
-        check_focus(x11, window)?;
-        check_emergency(x11)?;
-        check_tab_live(x11, window, profile)?;
-        x11.click(transmute_x, transmute_y, MouseButton::Left, Modifiers::None)?;
-        sleep(Duration::from_millis(350));
+        check_focus(platform, window)?;
+        check_emergency(platform)?;
+        check_tab_live(platform, window, profile)?;
+        platform.click(transmute_at, MouseButton::Left, Modifiers::NONE)?;
+        sleep(timing.transmute_wait);
 
-        let cube = read_cube_live(x11, window, profile)?;
+        // La transmutation peut prendre quelques images. On interroge le cube
+        // jusqu'à ce qu'il passe de 3 à 1 case occupée, sans dépasser
+        // `cube_timeout`.
+        let deadline = Instant::now() + timing.cube_timeout;
+        let cube = loop {
+            let cube = read_cube_live(platform, window, profile, timing)?;
+            let count = cube.occupied.iter().filter(|occupied| **occupied).count();
+            if count != 3 || Instant::now() >= deadline {
+                break cube;
+            }
+            sleep(timing.poll);
+        };
         let occupied: Vec<usize> = cube
             .occupied
             .iter()
@@ -487,39 +566,33 @@ fn transmute_with_retry(
 }
 
 fn retrieve_with_retry(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     logger: &mut Logger,
     col: usize,
     row: usize,
     target_before: u32,
+    timing: Timing,
 ) -> Result<()> {
     let expected = target_before.saturating_add(1);
 
     for attempt in 1..=3 {
-        check_focus(x11, window)?;
-        check_emergency(x11)?;
-        check_tab_live(x11, window, profile)?;
+        check_focus(platform, window)?;
+        check_emergency(platform)?;
+        check_tab_live(platform, window, profile)?;
 
-        let cube = read_cube_live(x11, window, profile)?;
+        let cube = read_cube_live(platform, window, profile, timing)?;
         let Some(result_slot) = cube.occupied.iter().position(|occupied| *occupied) else {
             if wait_cell(
-                x11,
-                window,
-                profile,
-                templates,
-                col,
-                row,
-                expected,
-                Duration::from_secs(1),
+                platform, window, profile, templates, col, row, expected, timing,
             )?
             .is_some()
             {
                 return Ok(());
             }
-            let image = x11.capture_window(window)?;
+            let image = platform.capture(window)?;
             let reading = table::read_cell(&image, profile, templates, col, row, false)?;
             if reading.best_candidate == Some(planner::MAX_STACK as u16) {
                 logger.log(full_case_message(col, row));
@@ -537,18 +610,11 @@ fn retrieve_with_retry(
             );
         };
 
-        let (result_x, result_y) = cube_slot_point(window, profile, result_slot);
-        x11.click(result_x, result_y, MouseButton::Left, Modifiers::CtrlShift)?;
+        let result_point = cube_slot_point(window, profile, result_slot);
+        platform.click(result_point, MouseButton::Left, Modifiers::CTRL_SHIFT)?;
 
         if let Some(reading) = wait_cell(
-            x11,
-            window,
-            profile,
-            templates,
-            col,
-            row,
-            expected,
-            Duration::from_secs(2),
+            platform, window, profile, templates, col, row, expected, timing,
         )? {
             if !reading.is_confident() {
                 logger.log(format!(
@@ -556,7 +622,7 @@ fn retrieve_with_retry(
                     reading.best_candidate, reading.score, reading.margin
                 ));
             }
-            let cube = read_cube_live(x11, window, profile)?;
+            let cube = read_cube_live(platform, window, profile, timing)?;
             if cube.occupied.iter().any(|occupied| *occupied) {
                 bail!("le cube n'est pas vide après la réinscription de la gemme");
             }
@@ -568,7 +634,7 @@ fn retrieve_with_retry(
         ));
     }
 
-    if target_full(x11, window, profile, templates, col, row)? {
+    if target_full(platform, window, profile, templates, col, row)? {
         logger.log(full_case_message(col, row));
         bail!(
             "la case cible est pleine ({}); la gemme reste dans le cube",
@@ -581,14 +647,14 @@ fn retrieve_with_retry(
 
 /// Vrai si la case cible a atteint la capacité maximale d'une pile.
 fn target_full(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     col: usize,
     row: usize,
 ) -> Result<bool> {
-    let image = x11.capture_window(window)?;
+    let image = platform.capture(window)?;
     let reading = table::read_cell(&image, profile, templates, col, row, false)?;
     Ok(reading.best_candidate == Some(planner::MAX_STACK as u16))
 }
@@ -618,25 +684,25 @@ fn report_full_receivers(
 /// Attend que la cellule atteigne la valeur attendue. Retourne `None` si le
 /// délai expire sans erreur de sécurité.
 fn wait_cell(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     col: usize,
     row: usize,
     expected: u32,
-    timeout: Duration,
+    timing: Timing,
 ) -> Result<Option<CountReading>> {
     let expected_u16 = u16::try_from(expected)
         .map_err(|_| anyhow!("valeur attendue trop grande pour une cellule: {expected}"))?;
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now() + timing.cell_timeout;
 
     // Le curseur reste au point de repos pendant toute l'attente: on le place
     // une seule fois, puis on relit la cellule jusqu'à la valeur attendue.
-    park(x11, window, profile)?;
+    park(platform, window, profile, timing)?;
     loop {
-        check_emergency(x11)?;
-        let image = x11.capture_window(window)?;
+        check_emergency(platform)?;
+        let image = platform.capture(window)?;
         let reading = table::read_cell(&image, profile, templates, col, row, false)?;
         if expected_accepted(&reading, expected_u16) {
             return Ok(Some(reading));
@@ -645,7 +711,7 @@ fn wait_cell(
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        sleep(Duration::from_millis(60));
+        sleep(timing.poll);
     }
 }
 
@@ -657,47 +723,57 @@ fn expected_accepted(reading: &CountReading, expected: u16) -> bool {
     reading.best_candidate == Some(expected) && reading.score >= 0.70
 }
 
-fn read_cube_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<CubeReading> {
-    park(x11, window, profile)?;
-    let image = x11.capture_window(window)?;
+fn read_cube_live(
+    platform: &impl Platform,
+    window: &WindowInfo,
+    profile: &Profile,
+    timing: Timing,
+) -> Result<CubeReading> {
+    park(platform, window, profile, timing)?;
+    let image = platform.capture(window)?;
     cube::read_cube(&image, profile)
 }
 
 /// Déplace le curseur au point de repos. Avant de le déplacer, vérifie que
 /// l'utilisateur n'a pas bougé la souris depuis la dernière action du
 /// programme. C'est le failsafe de souris, en plus de F9.
-fn park(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
-    if x11.pointer_moved_by_user()? {
+fn park(
+    platform: &impl Platform,
+    window: &WindowInfo,
+    profile: &Profile,
+    timing: Timing,
+) -> Result<()> {
+    if platform.pointer_moved_by_user()? {
         return Err(safety("mouvement de souris détecté: arrêt"));
     }
 
-    let (park_x, park_y) = park_point(window, profile);
-    x11.move_pointer(park_x, park_y)?;
-    sleep(Duration::from_millis(60));
-    check_emergency(x11)?;
-    x11.note_pointer()?;
+    let park_at = park_point(window, profile);
+    platform.move_pointer(park_at)?;
+    sleep(timing.park_settle);
+    check_emergency(platform)?;
+    platform.note_pointer()?;
     Ok(())
 }
 
-fn check_focus(x11: &X11, window: &GameWindow) -> Result<()> {
-    if !x11.is_focused(window)? {
+fn check_focus(platform: &impl Platform, window: &WindowInfo) -> Result<()> {
+    if !platform.is_focused(window)? {
         return Err(safety("le jeu a perdu le focus"));
     }
     Ok(())
 }
 
-fn check_emergency(x11: &X11) -> Result<()> {
+fn check_emergency(platform: &impl Platform) -> Result<()> {
     if crate::hotkeys::stop_requested() {
         return Err(safety("arrêt d'urgence demandé (F9/Ctrl+C terminal)"));
     }
-    if x11.emergency_requested()? {
+    if platform.emergency_requested()? {
         return Err(safety("arrêt d'urgence demandé (F9)"));
     }
     Ok(())
 }
 
-fn check_tab_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
-    let image = x11.capture_window(window)?;
+fn check_tab_live(platform: &impl Platform, window: &WindowInfo, profile: &Profile) -> Result<()> {
+    let image = platform.capture(window)?;
     if !crate::vision::tabs::gemmes_active(&image, profile)? {
         return Err(safety("l'onglet Gemmes n'est plus actif"));
     }
@@ -707,16 +783,17 @@ fn check_tab_live(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<(
 /// Relit les 35 cellules et compare l'état réel au modèle. Une différence
 /// arrête le run avant de continuer sur un état incohérent.
 fn audit_table(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     logger: &mut Logger,
     expected: &planner::Counts,
     step: usize,
+    timing: Timing,
 ) -> Result<()> {
-    park(x11, window, profile)?;
-    let image = x11.capture_window(window)?;
+    park(platform, window, profile, timing)?;
+    let image = platform.capture(window)?;
     let table = table::read_table(&image, profile, templates, false)
         .map_err(|error| safety(format!("audit étape {step}: lecture impossible: {error:#}")))?;
 
@@ -772,24 +849,25 @@ fn compare_counts(expected: &planner::Counts, actual: &planner::Counts) -> Vec<S
 }
 
 fn wait_for_resume(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
     logger: &mut Logger,
     counts: &mut planner::Counts,
+    timing: Timing,
 ) -> Result<()> {
     logger.log("Pause: F8 pour reprendre, F9/Ctrl+C pour arrêter.");
     loop {
-        if crate::hotkeys::stop_requested() || x11.emergency_requested()? {
+        if crate::hotkeys::stop_requested() || platform.emergency_requested()? {
             return Err(safety("arrêt d'urgence demandé (F9/Ctrl+C)"));
         }
-        if x11.take_pause() || crate::hotkeys::take_pause() {
+        if platform.take_pause() || crate::hotkeys::take_pause() {
             logger.log("Reprise demandée; relecture de la table et du cube...");
-            match reload_state(x11, window, profile, templates) {
+            match reload_state(platform, window, profile, templates, timing) {
                 Ok(new_counts) => {
                     *counts = new_counts;
-                    let _ = x11.take_pause();
+                    let _ = platform.take_pause();
                     let _ = crate::hotkeys::take_pause();
                     logger.log(format!(
                         "Reprise: total table {}",
@@ -812,18 +890,19 @@ fn wait_for_resume(
 }
 
 fn reload_state(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     templates: &TemplateSet,
+    timing: Timing,
 ) -> Result<planner::Counts> {
-    x11.focus_window(window)?;
-    sleep(Duration::from_millis(200));
-    if !x11.is_focused(window)? {
+    platform.focus(window)?;
+    sleep(timing.after_focus);
+    if !platform.is_focused(window)? {
         bail!("le jeu n'a pas le focus");
     }
-    park_for_resume(x11, window, profile)?;
-    let image = x11.capture_window(window)?;
+    park_for_resume(platform, window, profile, timing)?;
+    let image = platform.capture(window)?;
     let table = table::read_table(&image, profile, templates, false)
         .map_err(|error| anyhow!("relecture de la table impossible: {error:#}"))?;
 
@@ -845,12 +924,17 @@ fn reload_state(
     crate::counts_from_table(&table)
 }
 
-fn park_for_resume(x11: &X11, window: &GameWindow, profile: &Profile) -> Result<()> {
-    let (park_x, park_y) = park_point(window, profile);
-    x11.move_pointer(park_x, park_y)?;
-    sleep(Duration::from_millis(60));
-    check_emergency(x11)?;
-    x11.note_pointer()?;
+fn park_for_resume(
+    platform: &impl Platform,
+    window: &WindowInfo,
+    profile: &Profile,
+    timing: Timing,
+) -> Result<()> {
+    let park_at = park_point(window, profile);
+    platform.move_pointer(park_at)?;
+    sleep(timing.park_settle);
+    check_emergency(platform)?;
+    platform.note_pointer()?;
     Ok(())
 }
 
@@ -862,13 +946,14 @@ fn notify(title: &str, body: &str) {
 }
 
 fn recover_cube(
-    x11: &X11,
-    window: &GameWindow,
+    platform: &impl Platform,
+    window: &WindowInfo,
     profile: &Profile,
     logger: &mut Logger,
+    timing: Timing,
 ) -> Result<()> {
     for attempt in 1..=3 {
-        let cube = read_cube_live(x11, window, profile)?;
+        let cube = read_cube_live(platform, window, profile, timing)?;
         let occupied: Vec<usize> = cube
             .occupied
             .iter()
@@ -884,24 +969,24 @@ fn recover_cube(
             occupied.len()
         ));
         for index in occupied {
-            check_focus(x11, window)?;
-            check_emergency(x11)?;
-            let (x, y) = cube_slot_point(window, profile, index);
-            x11.click(x, y, MouseButton::Left, Modifiers::CtrlShift)?;
-            sleep(Duration::from_millis(120));
+            check_focus(platform, window)?;
+            check_emergency(platform)?;
+            let point = cube_slot_point(window, profile, index);
+            platform.click(point, MouseButton::Left, Modifiers::CTRL_SHIFT)?;
+            sleep(timing.retry_pause);
         }
     }
 
-    let cube = read_cube_live(x11, window, profile)?;
+    let cube = read_cube_live(platform, window, profile, timing)?;
     if cube.occupied.iter().any(|occupied| *occupied) {
         bail!("le cube n'a pas pu être vidé");
     }
     Ok(())
 }
 
-fn save_error_frame(x11: &X11, window: &GameWindow, logger: &mut Logger) {
+fn save_error_frame(platform: &impl Platform, window: &WindowInfo, logger: &mut Logger) {
     let path = crate::logging::run_dir().join(format!("error-{}.png", epoch_seconds()));
-    match x11.capture_window(window) {
+    match platform.capture(window) {
         Ok(image) => match image.save(&path) {
             Ok(()) => logger.log(format!("Capture d'erreur: {}", path.display())),
             Err(error) => logger.log(format!("Échec de sauvegarde de la capture: {error}")),
@@ -910,33 +995,39 @@ fn save_error_frame(x11: &X11, window: &GameWindow, logger: &mut Logger) {
     }
 }
 
-fn cell_click_point(window: &GameWindow, profile: &Profile, col: usize, row: usize) -> (i32, i32) {
-    let x =
-        window.x + profile.panel.x + profile.table.count_right_edges[col] + profile.click.source_dx;
-    let y = window.y + profile.panel.y + profile.table.count_tops[row] + profile.click.source_dy;
-    (x, y)
+fn cell_click_point(window: &WindowInfo, profile: &Profile, col: usize, row: usize) -> Point {
+    Point {
+        x: window.origin.x
+            + profile.panel.x
+            + profile.table.count_right_edges[col]
+            + profile.click.source_dx,
+        y: window.origin.y
+            + profile.panel.y
+            + profile.table.count_tops[row]
+            + profile.click.source_dy,
+    }
 }
 
-fn transmute_point(window: &GameWindow, profile: &Profile) -> (i32, i32) {
-    (
-        window.x + profile.panel.x + profile.click.transmute_x,
-        window.y + profile.panel.y + profile.click.transmute_y,
-    )
+fn transmute_point(window: &WindowInfo, profile: &Profile) -> Point {
+    Point {
+        x: window.origin.x + profile.panel.x + profile.click.transmute_x,
+        y: window.origin.y + profile.panel.y + profile.click.transmute_y,
+    }
 }
 
-fn cube_slot_point(window: &GameWindow, profile: &Profile, index: usize) -> (i32, i32) {
+fn cube_slot_point(window: &WindowInfo, profile: &Profile, index: usize) -> Point {
     let slot = profile.cube.slots[index];
-    (
-        window.x + profile.panel.x + slot.x + slot.width as i32 / 2,
-        window.y + profile.panel.y + slot.y + slot.height as i32 / 2,
-    )
+    Point {
+        x: window.origin.x + profile.panel.x + slot.x + slot.width as i32 / 2,
+        y: window.origin.y + profile.panel.y + slot.y + slot.height as i32 / 2,
+    }
 }
 
-fn park_point(window: &GameWindow, profile: &Profile) -> (i32, i32) {
-    (
-        window.x + profile.panel.x + profile.click.park_x,
-        window.y + profile.panel.y + profile.click.park_y,
-    )
+fn park_point(window: &WindowInfo, profile: &Profile) -> Point {
+    Point {
+        x: window.origin.x + profile.panel.x + profile.click.park_x,
+        y: window.origin.y + profile.panel.y + profile.click.park_y,
+    }
 }
 
 #[cfg(test)]

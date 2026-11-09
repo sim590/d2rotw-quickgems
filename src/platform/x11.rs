@@ -18,6 +18,11 @@ use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 
+use super::{
+    ControlSignals, InputInjector, Modifiers, MouseButton, Point, ScreenCapture, Size, WindowId,
+    WindowInfo, WindowSystem,
+};
+
 const XTEST_MOTION_NOTIFY: u8 = 6;
 const XTEST_BUTTON_PRESS: u8 = 4;
 const XTEST_BUTTON_RELEASE: u8 = 5;
@@ -29,18 +34,6 @@ const KEYSYM_SHIFT_L: u32 = 0xffe1;
 const KEYSYM_F8: u32 = 0xffc5;
 const KEYSYM_F9: u32 = 0xffc6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Modifiers {
-    None,
-    CtrlShift,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Right,
-}
-
 impl MouseButton {
     fn code(self) -> u8 {
         match self {
@@ -48,16 +41,6 @@ impl MouseButton {
             MouseButton::Right => 3,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct GameWindow {
-    pub id: Window,
-    pub title: String,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
 }
 
 pub struct X11 {
@@ -204,7 +187,7 @@ impl X11 {
         self.pause_pending.replace(false)
     }
 
-    pub fn find_game_window(&self) -> Result<GameWindow> {
+    pub fn find_game_window(&self) -> Result<WindowInfo> {
         if let Some(window) = self.find_by_client_list()? {
             return self.window_info(window);
         }
@@ -214,23 +197,23 @@ impl X11 {
         bail!("fenêtre de Diablo II introuvable")
     }
 
-    pub fn capture_window(&self, window: &GameWindow) -> Result<RgbImage> {
+    pub fn capture_window(&self, window: &WindowInfo) -> Result<RgbImage> {
         let reply = self
             .connection
             .get_image(
                 ImageFormat::Z_PIXMAP,
-                window.id,
+                window.id.0 as u32,
                 0,
                 0,
-                window.width as u16,
-                window.height as u16,
+                window.size.width as u16,
+                window.size.height as u16,
                 !0,
             )
             .context("XGetImage a échoué")?
             .reply()
             .context("XGetImage n'a pas retourné d'image")?;
 
-        let pixel_count = window.width as usize * window.height as usize;
+        let pixel_count = window.size.width as usize * window.size.height as usize;
         if pixel_count == 0 || reply.data.len() % pixel_count != 0 {
             bail!(
                 "format d'image X11 inattendu: {} octets pour {} pixels",
@@ -251,14 +234,18 @@ impl X11 {
             rgb.push(pixel[0]);
         }
 
-        ImageBuffer::<Rgb<u8>, _>::from_raw(window.width, window.height, rgb)
+        ImageBuffer::<Rgb<u8>, _>::from_raw(window.size.width, window.size.height, rgb)
             .ok_or_else(|| anyhow!("buffer RGB invalide"))
     }
 
-    pub fn focus_window(&self, window: &GameWindow) -> Result<()> {
+    pub fn focus_window(&self, window: &WindowInfo) -> Result<()> {
         // Demande au WM de donner le focus, puis force le focus clavier.
-        let event =
-            ClientMessageEvent::new(32, window.id, self.net_active_window, [2u32, 0, 0, 0, 0]);
+        let event = ClientMessageEvent::new(
+            32,
+            window.id.0 as u32,
+            self.net_active_window,
+            [2u32, 0, 0, 0, 0],
+        );
         self.connection
             .send_event(
                 false,
@@ -269,19 +256,19 @@ impl X11 {
             .context("impossible d'envoyer _NET_ACTIVE_WINDOW")?;
         self.connection
             .configure_window(
-                window.id,
+                window.id.0 as u32,
                 &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
             )
             .context("impossible de lever la fenêtre du jeu")?;
         self.connection
-            .set_input_focus(InputFocus::PARENT, window.id, 0u32)
+            .set_input_focus(InputFocus::PARENT, window.id.0 as u32, 0u32)
             .context("impossible de donner le focus au jeu")?;
         self.connection.flush().context("flush X11 impossible")?;
         sleep(Duration::from_millis(150));
         Ok(())
     }
 
-    pub fn is_focused(&self, window: &GameWindow) -> Result<bool> {
+    pub fn is_focused(&self, window: &WindowInfo) -> Result<bool> {
         let focus = self
             .connection
             .get_input_focus()
@@ -292,7 +279,7 @@ impl X11 {
         if focus == 0 {
             return Ok(false);
         }
-        self.is_descendant(focus, window.id)
+        self.is_descendant(focus, window.id.0 as u32)
     }
 
     pub fn click(&self, x: i32, y: i32, button: MouseButton, modifiers: Modifiers) -> Result<()> {
@@ -336,7 +323,7 @@ impl X11 {
     }
 
     fn press_modifiers(&self, modifiers: Modifiers) -> Result<()> {
-        if modifiers == Modifiers::CtrlShift {
+        if modifiers == Modifiers::CTRL_SHIFT {
             self.key(XTEST_KEY_PRESS, self.ctrl_keycode)?;
             self.key(XTEST_KEY_PRESS, self.shift_keycode)?;
             self.connection.flush().context("flush X11 impossible")?;
@@ -368,7 +355,7 @@ impl X11 {
     }
 
     fn release_modifiers(&self, modifiers: Modifiers) -> Result<()> {
-        if modifiers == Modifiers::CtrlShift {
+        if modifiers == Modifiers::CTRL_SHIFT {
             self.key(XTEST_KEY_RELEASE, self.shift_keycode)?;
             self.key(XTEST_KEY_RELEASE, self.ctrl_keycode)?;
             self.connection.flush().context("flush X11 impossible")?;
@@ -513,7 +500,7 @@ impl X11 {
         Ok(String::from_utf8_lossy(value).to_string())
     }
 
-    fn window_info(&self, window: Window) -> Result<GameWindow> {
+    fn window_info(&self, window: Window) -> Result<WindowInfo> {
         let geometry = self
             .connection
             .get_geometry(window)
@@ -526,13 +513,17 @@ impl X11 {
             .context("XTranslateCoordinates a échoué")?
             .reply()
             .context("XTranslateCoordinates sans réponse")?;
-        Ok(GameWindow {
-            id: window,
+        Ok(WindowInfo {
+            id: WindowId(u64::from(window)),
             title: self.window_title(window).unwrap_or_default(),
-            x: i32::from(position.dst_x),
-            y: i32::from(position.dst_y),
-            width: u32::from(geometry.width),
-            height: u32::from(geometry.height),
+            origin: Point {
+                x: i32::from(position.dst_x),
+                y: i32::from(position.dst_y),
+            },
+            size: Size {
+                width: u32::from(geometry.width),
+                height: u32::from(geometry.height),
+            },
         })
     }
 }
@@ -544,4 +535,56 @@ fn intern_atom(connection: &RustConnection, name: &[u8]) -> Result<u32> {
         .reply()
         .context("intern_atom sans réponse")
         .map(|reply| reply.atom)
+}
+
+// Le contrat commun délègue aux méthodes inhérentes de X11, qui restent
+// spécifiques à X11 (noms et signatures historiques). Les chemins `X11::`
+// évitent toute ambiguïté entre la méthode inhérente et celle du trait.
+
+impl WindowSystem for X11 {
+    fn find_game_window(&self) -> Result<WindowInfo> {
+        X11::find_game_window(self)
+    }
+
+    fn focus(&self, window: &WindowInfo) -> Result<()> {
+        X11::focus_window(self, window)
+    }
+
+    fn is_focused(&self, window: &WindowInfo) -> Result<bool> {
+        X11::is_focused(self, window)
+    }
+}
+
+impl ScreenCapture for X11 {
+    fn capture(&self, window: &WindowInfo) -> Result<RgbImage> {
+        X11::capture_window(self, window)
+    }
+}
+
+impl InputInjector for X11 {
+    fn move_pointer(&self, point: Point) -> Result<()> {
+        X11::move_pointer(self, point.x, point.y)
+    }
+
+    fn click(&self, point: Point, button: MouseButton, modifiers: Modifiers) -> Result<()> {
+        X11::click(self, point.x, point.y, button, modifiers)
+    }
+
+    fn note_pointer(&self) -> Result<()> {
+        X11::note_pointer(self)
+    }
+
+    fn pointer_moved_by_user(&self) -> Result<bool> {
+        X11::pointer_moved_by_user(self)
+    }
+}
+
+impl ControlSignals for X11 {
+    fn emergency_requested(&self) -> Result<bool> {
+        X11::emergency_requested(self)
+    }
+
+    fn take_pause(&self) -> bool {
+        X11::take_pause(self)
+    }
 }

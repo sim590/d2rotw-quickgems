@@ -213,17 +213,17 @@ fn resolve_config(path: Option<&Path>) -> Result<Config> {
 
 fn capture_live(output: &Path, profile_path: Option<&Path>) -> Result<()> {
     let profile = resolve_profile(profile_path)?;
-    let x11 = platform::x11::X11::new()?;
+    let x11 = platform::native()?;
     let window = x11.find_game_window()?;
     println!(
         "Fenêtre: {} ({}x{}) @ ({}, {})",
-        window.title, window.width, window.height, window.x, window.y
+        window.title, window.size.width, window.size.height, window.origin.x, window.origin.y
     );
-    if window.width != profile.image_width || window.height != profile.image_height {
+    if window.size.width != profile.image_width || window.size.height != profile.image_height {
         bail!(
             "la fenêtre du jeu fait {}x{}, mais le profil attend {}x{}",
-            window.width,
-            window.height,
+            window.size.width,
+            window.size.height,
             profile.image_width,
             profile.image_height
         );
@@ -260,6 +260,7 @@ fn run(
         start_tier,
         audit_every,
         debug,
+        timing: executor::Timing::real(),
     };
 
     match image_path {
