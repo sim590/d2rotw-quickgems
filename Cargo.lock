@@ -190,7 +190,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2row-quickgems"
+name = "d2rotw-quickgems"
 version = "0.1.0"
 dependencies = [
  "anyhow",
