@@ -124,6 +124,13 @@ config parsing, and action verification rules.
 - `profiles/2560x1440.toml`: measured layout, tabs, and click points.
 - `assets/exocet-blizzard-medium.ttf`: the game font used for templates.
 
+## Platform backends
+
+All OS-specific code lives behind four traits in `src/platform/`: window
+discovery and focus, screen capture, input injection, and control signals.
+The current backend targets X11/XWayland. To add another platform, see
+[docs/platform.md](docs/platform.md).
+
 ## License
 
 The code is licensed under the GNU General Public License, version 3
