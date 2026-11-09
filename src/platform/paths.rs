@@ -20,10 +20,11 @@ pub trait ConfigLocator {
 }
 
 /// Chemins natifs de la plateforme cible.
-#[cfg(target_os = "linux")]
+///
+/// `dirs::config_dir()` fournit la base propre à l'OS; le reste du chemin est
+/// commun à toutes les plateformes.
 pub struct NativePaths;
 
-#[cfg(target_os = "linux")]
 impl ConfigLocator for NativePaths {
     fn config_paths(&self) -> Vec<PathBuf> {
         dirs::config_dir()

@@ -19,10 +19,7 @@ pub mod mock;
 
 mod paths;
 
-pub use paths::ConfigLocator;
-
-#[cfg(target_os = "linux")]
-pub use paths::NativePaths;
+pub use paths::{ConfigLocator, NativePaths};
 
 /// Point en coordonnées écran globales. Les moniteurs à coordonnées négatives
 /// sont permis.

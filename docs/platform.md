@@ -142,9 +142,11 @@ pub trait ConfigLocator {
 }
 ```
 
-Linux utilise `dirs::config_dir()` (crate `dirs`) : `XDG_CONFIG_HOME` s'il est
-défini et absolu, sinon `~/.config`. Le fichier attendu est
-`d2rotw-quickgems/quickgems.toml`.
+L'implémentation est commune aux plateformes : `dirs::config_dir()` fournit la
+base propre à l'OS (`XDG_CONFIG_HOME` ou `~/.config` sur Linux, `%APPDATA%` sur
+Windows, `~/Library/Application Support` sur macOS), puis le chemin
+`d2rotw-quickgems/quickgems.toml` est ajouté. Une implémentation propre n'est
+nécessaire que si les conventions d'une plateforme divergent.
 
 L'ordre de priorité est appliqué par `main::resolve_config` :
 
