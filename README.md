@@ -84,8 +84,17 @@ Overrides are optional; omitted fields fall back to `[keep.default]`.
 
 If the user configuration file does not exist, it is created on first use
 from the built-in default, so you can find and edit it directly. It is never
-overwritten. An existing but invalid user configuration is an error; it is
-never silently ignored.
+overwritten.
+
+To create it explicitly without starting the game:
+
+```sh
+cargo run --release -- config generate
+```
+
+The command prints the path and never overwrites an existing file. When
+`run` or `plan` loads an existing configuration, an invalid file is an error;
+it is never silently ignored.
 
 `--profile` is optional; the built-in 2560x1440 profile is used when omitted.
 

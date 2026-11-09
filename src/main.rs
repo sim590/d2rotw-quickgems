@@ -34,7 +34,19 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    /// Crée le fichier de configuration utilisateur à partir du contenu intégré.
+    Generate,
+}
+
+#[derive(Subcommand)]
 enum Command {
+    /// Gère la configuration utilisateur.
+    Config {
+        /// Sous-commande de gestion de la configuration.
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Lit une capture d'écran et affiche le tableau des gemmes.
     Inspect {
         /// Capture d'écran du jeu (PNG), par exemple 5120x1440 avec le jeu à gauche.
@@ -124,6 +136,9 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Config { command } => match command {
+            ConfigCommand::Generate => generate_initial_config(&config_paths::NativePaths),
+        },
         Command::Inspect {
             image,
             profile,
@@ -202,6 +217,30 @@ fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
         Some(path) => Profile::load(path),
         None => Profile::from_toml(BUILTIN_PROFILE, "profil intégré 2560x1440"),
     }
+}
+
+/// Crée le fichier de configuration utilisateur à partir du contenu intégré.
+///
+/// Contrairement à `resolve_config`, cette commande ne se replie jamais
+/// silencieusement sur la configuration intégrée : si le fichier ne peut pas
+/// être créé, c'est une erreur.
+fn generate_initial_config(locator: &impl config_paths::ConfigLocator) -> Result<()> {
+    let Some(path) = locator.config_paths().into_iter().next() else {
+        bail!("aucun chemin de configuration utilisateur pour cette plateforme");
+    };
+
+    if path.exists() {
+        println!(
+            "Configuration utilisateur déjà présente: {}",
+            path.display()
+        );
+        return Ok(());
+    }
+
+    create_user_config(&path).with_context(|| format!("impossible de créer {}", path.display()))?;
+    Config::load(&path).context("le fichier de configuration créé est invalide")?;
+    println!("Configuration utilisateur créée: {}", path.display());
+    Ok(())
 }
 
 /// Charge la configuration demandée. Priorité :
@@ -704,6 +743,50 @@ mod tests {
 
         let config = resolve_config(None, &locator).expect("configuration");
         assert_eq!(normal_keep(&config), 7);
+    }
+
+    #[test]
+    fn generate_creates_the_user_config() {
+        let dir = TempDir::new();
+        let path = dir.path().join("d2rotw-quickgems").join("quickgems.toml");
+        let locator = MockLocator(vec![path.clone()]);
+
+        super::generate_initial_config(&locator).expect("génération");
+
+        assert!(path.exists(), "le fichier doit être créé");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("lecture"),
+            BUILTIN_CONFIG
+        );
+    }
+
+    #[test]
+    fn generate_keeps_an_existing_user_config() {
+        let user = TempConfig::new("[keep.default]\nnormal = 7\n");
+        let locator = MockLocator(vec![user.path().to_path_buf()]);
+
+        super::generate_initial_config(&locator).expect("génération");
+
+        assert_eq!(
+            std::fs::read_to_string(user.path()).expect("lecture"),
+            "[keep.default]\nnormal = 7\n"
+        );
+    }
+
+    #[test]
+    fn generate_fails_when_creation_fails() {
+        let dir = TempDir::new();
+        let blocker = dir.path().join("fichier");
+        std::fs::write(&blocker, "x").expect("fichier bloquant");
+        let locator = MockLocator(vec![blocker.join("quickgems.toml")]);
+
+        assert!(super::generate_initial_config(&locator).is_err());
+    }
+
+    #[test]
+    fn generate_fails_without_a_user_path() {
+        let locator = MockLocator(Vec::new());
+        assert!(super::generate_initial_config(&locator).is_err());
     }
 
     #[test]
