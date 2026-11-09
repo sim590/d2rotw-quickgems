@@ -44,10 +44,7 @@ mod tests {
 
     #[test]
     fn composes_the_app_config_path() {
-        let path = super::app_config_path(Path::new("/home/simon/.config"));
-        assert_eq!(
-            path,
-            Path::new("/home/simon/.config/d2rotw-quickgems/quickgems.toml")
-        );
+        let path = super::app_config_path(Path::new("config"));
+        assert_eq!(path, Path::new("config/d2rotw-quickgems/quickgems.toml"));
     }
 }
