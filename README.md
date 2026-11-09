@@ -73,9 +73,8 @@ order: `abime`, `imparfait`, `normal`, `sans_defaut`, `parfait`.
 
 Overrides are optional; omitted fields fall back to `[keep.default]`.
 
-`--profile` and `--config` are optional. If omitted, the file in the current
-directory is used when present; otherwise the built-in 2560x1440 profile and
-the built-in default configuration are used. An explicit path always wins.
+`--profile` and `--config` are optional. If omitted, the built-in 2560x1440
+profile and the built-in configuration are used. An explicit path always wins.
 
 ## Safety
 

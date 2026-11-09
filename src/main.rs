@@ -190,35 +190,25 @@ fn parse_start_tier(value: &str) -> std::result::Result<usize, String> {
     Ok(tier)
 }
 
-const DEFAULT_PROFILE_PATH: &str = "profiles/2560x1440.toml";
-const DEFAULT_CONFIG_PATH: &str = "quickgems.toml";
 const BUILTIN_PROFILE: &str = include_str!("../profiles/2560x1440.toml");
 const BUILTIN_CONFIG: &str = include_str!("../quickgems.toml");
 
-/// Charge le profil demandé. Sans argument, le fichier par défaut du
-/// répertoire courant est utilisé s'il existe; sinon le profil intégré prend
-/// le relais, pour que le binaire fonctionne hors du dépôt.
+/// Charge le profil demandé. Sans argument, le profil intégré au binaire est
+/// utilisé; un chemin explicite le remplace.
 fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
-    if let Some(path) = path {
-        return Profile::load(path);
+    match path {
+        Some(path) => Profile::load(path),
+        None => Profile::from_toml(BUILTIN_PROFILE, "profil intégré 2560x1440"),
     }
-    let default = Path::new(DEFAULT_PROFILE_PATH);
-    if default.exists() {
-        return Profile::load(default);
-    }
-    Profile::from_toml(BUILTIN_PROFILE, "profil intégré 2560x1440")
 }
 
-/// Charge la configuration demandée, avec le même repli que le profil.
+/// Charge la configuration demandée. Sans argument, la configuration intégrée
+/// au binaire est utilisée; un chemin explicite la remplace.
 fn resolve_config(path: Option<&Path>) -> Result<Config> {
-    if let Some(path) = path {
-        return Config::load(path);
+    match path {
+        Some(path) => Config::load(path),
+        None => Config::from_toml(BUILTIN_CONFIG, "configuration intégrée"),
     }
-    let default = Path::new(DEFAULT_CONFIG_PATH);
-    if default.exists() {
-        return Config::load(default);
-    }
-    Config::from_toml(BUILTIN_CONFIG, "configuration intégrée")
 }
 
 fn capture_live(output: &Path, profile_path: Option<&Path>) -> Result<()> {
