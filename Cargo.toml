@@ -8,6 +8,7 @@ license = "GPL-3.0-only"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
+dirs = "7.0"
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"

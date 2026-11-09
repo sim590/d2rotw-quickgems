@@ -53,8 +53,8 @@ enum Command {
         /// Profil de disposition (TOML); profil intégré si absent.
         #[arg(long)]
         profile: Option<PathBuf>,
-        /// Prescription des quantités minimales à conserver; configuration
-        /// intégrée si absente.
+        /// Prescription des quantités minimales à conserver; priorité sur la
+        /// configuration utilisateur (XDG) et sur la configuration intégrée.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Limite la projection à N transmutations (budget).
@@ -89,8 +89,8 @@ enum Command {
         /// Profil de disposition (TOML); profil intégré si absent.
         #[arg(long)]
         profile: Option<PathBuf>,
-        /// Prescription des quantités minimales à conserver; configuration
-        /// intégrée si absente.
+        /// Prescription des quantités minimales à conserver; priorité sur la
+        /// configuration utilisateur (XDG) et sur la configuration intégrée.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Fait réellement les clics. Sans ce drapeau, le programme simule.
@@ -202,13 +202,22 @@ fn resolve_profile(path: Option<&Path>) -> Result<Profile> {
     }
 }
 
-/// Charge la configuration demandée. Sans argument, la configuration intégrée
-/// au binaire est utilisée; un chemin explicite la remplace.
-fn resolve_config(path: Option<&Path>) -> Result<Config> {
-    match path {
-        Some(path) => Config::load(path),
-        None => Config::from_toml(BUILTIN_CONFIG, "configuration intégrée"),
+/// Charge la configuration demandée. Priorité :
+/// 1. chemin explicite (`--config`);
+/// 2. fichier utilisateur de la plateforme, s'il existe;
+/// 3. configuration intégrée au binaire.
+fn resolve_config(path: Option<&Path>, locator: &impl platform::ConfigLocator) -> Result<Config> {
+    if let Some(path) = path {
+        return Config::load(path);
     }
+
+    for candidate in locator.config_paths() {
+        if candidate.exists() {
+            return Config::load(&candidate);
+        }
+    }
+
+    Config::from_toml(BUILTIN_CONFIG, "configuration intégrée")
 }
 
 fn capture_live(output: &Path, profile_path: Option<&Path>) -> Result<()> {
@@ -251,7 +260,7 @@ fn run(
     debug: bool,
 ) -> Result<()> {
     let profile = resolve_profile(profile_path)?;
-    let config = resolve_config(config_path)?;
+    let config = resolve_config(config_path, &platform::NativePaths)?;
     let templates = TemplateSet::load()?;
     let limit = resolve_run_limit(until_done, max_transmutations)?;
     let options = executor::RunOptions {
@@ -330,7 +339,7 @@ fn plan(
         bail!("impossible de planifier: la lecture du tableau n'est pas fiable");
     }
 
-    let config = resolve_config(config_path)?;
+    let config = resolve_config(config_path, &platform::NativePaths)?;
     let keep = config.keep_matrix()?;
     let counts = counts_from_table(&table)?;
     let plan = match max_transmutations {
@@ -543,7 +552,63 @@ fn cell_text(value: Option<u16>, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_run_limit;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{resolve_config, resolve_run_limit, BUILTIN_CONFIG};
+    use crate::config::Config;
+    use crate::platform::ConfigLocator;
+
+    struct MockLocator(Vec<PathBuf>);
+
+    impl ConfigLocator for MockLocator {
+        fn config_paths(&self) -> Vec<PathBuf> {
+            self.0.clone()
+        }
+    }
+
+    /// Fichier de configuration temporaire, supprimé à la fin du test.
+    struct TempConfig {
+        path: PathBuf,
+    }
+
+    impl TempConfig {
+        fn new(content: &str) -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "d2rotw-quickgems-test-{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).expect("répertoire temporaire");
+            let path = dir.join("quickgems.toml");
+            std::fs::write(&path, content).expect("écriture du fichier de test");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempConfig {
+        fn drop(&mut self) {
+            if let Some(dir) = self.path.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    fn normal_keep(config: &Config) -> u32 {
+        config.keep_matrix().expect("keep")[0][2]
+    }
+
+    fn builtin_keep() -> [[u32; 5]; 7] {
+        Config::from_toml(BUILTIN_CONFIG, "configuration intégrée")
+            .expect("configuration intégrée")
+            .keep_matrix()
+            .expect("keep")
+    }
 
     #[test]
     fn run_limit_defaults_and_until_done() {
@@ -554,5 +619,40 @@ mod tests {
             None
         );
         assert!(resolve_run_limit(true, Some(3)).is_err());
+    }
+
+    #[test]
+    fn explicit_config_wins_over_user_config() {
+        let user = TempConfig::new("[keep.default]\nnormal = 7\n");
+        let explicit = TempConfig::new("[keep.default]\nnormal = 3\n");
+        let locator = MockLocator(vec![user.path().to_path_buf()]);
+
+        let config = resolve_config(Some(explicit.path()), &locator).expect("configuration");
+        assert_eq!(normal_keep(&config), 3);
+    }
+
+    #[test]
+    fn user_config_wins_over_builtin() {
+        let user = TempConfig::new("[keep.default]\nnormal = 7\n");
+        let locator = MockLocator(vec![user.path().to_path_buf()]);
+
+        let config = resolve_config(None, &locator).expect("configuration");
+        assert_eq!(normal_keep(&config), 7);
+    }
+
+    #[test]
+    fn missing_user_config_falls_back_to_builtin() {
+        let locator = MockLocator(vec![PathBuf::from("/nonexistent/quickgems.toml")]);
+
+        let config = resolve_config(None, &locator).expect("configuration");
+        assert_eq!(config.keep_matrix().expect("keep"), builtin_keep());
+    }
+
+    #[test]
+    fn invalid_user_config_is_an_error() {
+        let user = TempConfig::new("ceci n'est pas du TOML");
+        let locator = MockLocator(vec![user.path().to_path_buf()]);
+
+        assert!(resolve_config(None, &locator).is_err());
     }
 }
