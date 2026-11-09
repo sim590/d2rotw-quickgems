@@ -14,6 +14,9 @@ use image::RgbImage;
 #[cfg(target_os = "linux")]
 pub mod x11;
 
+#[cfg(test)]
+pub mod mock;
+
 /// Point en coordonnées écran globales. Les moniteurs à coordonnées négatives
 /// sont permis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

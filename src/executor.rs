@@ -1032,8 +1032,101 @@ fn park_point(window: &WindowInfo, profile: &Profile) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_counts, expected_accepted};
-    use crate::vision::digits::CountReading;
+    use super::{check_focus, compare_counts, expected_accepted, park, wait_cell, Timing};
+    use crate::platform::mock::MockPlatform;
+    use crate::platform::{InputInjector, Point};
+    use crate::profile::Profile;
+    use crate::vision::digits::{CountReading, TemplateSet};
+    use image::RgbImage;
+
+    /// Profil dont la cellule (0,0) tombe sur l'origine de l'image.
+    fn cell_profile() -> Profile {
+        let text = include_str!("../profiles/2560x1440.toml");
+        let mut profile = Profile::from_toml(text, "profil de test").expect("profil");
+        profile.table.count_right_edges[0] = 34 - profile.panel.x;
+        profile.table.count_tops[0] = 1 - profile.panel.y;
+        profile
+    }
+
+    fn fixture(name: &str) -> RgbImage {
+        let bytes: &[u8] = match name {
+            "diamond_parfait_27" => include_bytes!("../tests/fixtures/diamond_parfait_27.png"),
+            other => panic!("fixture inconnue: {other}"),
+        };
+        image::load_from_memory(bytes)
+            .expect("fixture PNG")
+            .to_rgb8()
+    }
+
+    #[test]
+    fn wait_cell_accepts_the_expected_value() {
+        let platform = MockPlatform::new(38, 19);
+        platform.push_image(fixture("diamond_parfait_27"));
+        let window = platform.window().clone();
+        let profile = cell_profile();
+        let templates = TemplateSet::load().expect("templates");
+
+        let reading = wait_cell(
+            &platform,
+            &window,
+            &profile,
+            &templates,
+            0,
+            0,
+            27,
+            Timing::fast(),
+        )
+        .expect("attente")
+        .expect("valeur attendue");
+
+        assert_eq!(reading.best_candidate, Some(27));
+    }
+
+    #[test]
+    fn wait_cell_times_out_when_the_value_does_not_match() {
+        let platform = MockPlatform::new(38, 19);
+        platform.push_image(fixture("diamond_parfait_27"));
+        let window = platform.window().clone();
+        let profile = cell_profile();
+        let templates = TemplateSet::load().expect("templates");
+
+        let reading = wait_cell(
+            &platform,
+            &window,
+            &profile,
+            &templates,
+            0,
+            0,
+            28,
+            Timing::fast(),
+        )
+        .expect("attente");
+
+        assert!(reading.is_none());
+    }
+
+    #[test]
+    fn park_stops_when_the_pointer_was_moved() {
+        let platform = MockPlatform::new(2560, 1440);
+        let window = platform.window().clone();
+        let profile = cell_profile();
+        platform.set_pointer(Point { x: 500, y: 500 });
+        platform.note_pointer().expect("note");
+        platform.set_pointer(Point { x: 400, y: 500 });
+
+        assert!(park(&platform, &window, &profile, Timing::fast()).is_err());
+    }
+
+    #[test]
+    fn check_focus_fails_when_the_window_is_not_focused() {
+        let platform = MockPlatform::new(2560, 1440);
+        let window = platform.window().clone();
+        platform.set_focused(false);
+        assert!(check_focus(&platform, &window).is_err());
+
+        platform.set_focused(true);
+        assert!(check_focus(&platform, &window).is_ok());
+    }
 
     fn reading(best: u16, score: f32, margin: f32) -> CountReading {
         CountReading {
